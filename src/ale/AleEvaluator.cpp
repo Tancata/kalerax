@@ -57,8 +57,10 @@ AleEvaluator::AleEvaluator(
     const std::string &optimizationClassFile, double &mixtureAlpha,
     std::vector<Highway> &transferHighways,
     std::vector<AleModelParameters> &perLocalFamilyModelParams,
-    bool optimizeRates, bool optimizeVerbose, const Families &families,
-    const PerCoreGeneTrees &geneTrees)
+    std::vector<std::string> &wgdBranchLabels,
+    std::vector<double> &wgdRetentions, std::vector<double> &wgdResolutions,
+    bool &optimizeResolution, bool optimizeRates, bool optimizeVerbose,
+    const Families &families, const PerCoreGeneTrees &geneTrees)
     : _optimizer(optimizer), _speciesTree(speciesTree), _info(info),
       _optimizationClasses(_speciesTree.getTree(), modelParametrization,
                            optimizationClassFile, _info),
@@ -66,6 +68,9 @@ AleEvaluator::AleEvaluator(
       _modelParameters(perLocalFamilyModelParams),
       _optimizeRates(optimizeRates), _optimizeVerbose(optimizeVerbose),
       _families(families), _geneTrees(geneTrees),
+      _wgdBranchLabels(wgdBranchLabels), _wgdRetentions(wgdRetentions),
+      _wgdResolutionsState(wgdResolutions),
+      _optimizeResolution(optimizeResolution),
       _highPrecisions(getLocalFamilyNumber(), -1) {
   Logger::timed << "Initializing ccps and evaluators..." << std::endl;
   _evaluations.resize(getLocalFamilyNumber());
@@ -73,6 +78,29 @@ AleEvaluator::AleEvaluator(
     resetEvaluation(i, false);
   }
   ParallelContext::barrier();
+  // Restore any WGD / LORe state (e.g. from a checkpoint): _wgdBranchLabels /
+  // _wgdRetentions / _wgdResolutionsState / _optimizeResolution may already be
+  // populated at this point (AleState::unserialize runs before the evaluator
+  // is constructed), but the newly-built per-family evaluations above don't
+  // know about it yet. This restores q on each evaluation; the per-branch
+  // resolution vectors (which need _loreTargets / buildWGDStructure(), only
+  // available once declareWGDs() runs post-construction) are pushed there.
+  assert(_wgdBranchLabels.size() == _wgdRetentions.size());
+  assert(_wgdBranchLabels.size() == _wgdResolutionsState.size());
+  if (!_wgdBranchLabels.empty()) {
+    auto labelToNode = _speciesTree.getTree().getLabelToNode(false);
+    for (unsigned int i = 0; i < _wgdBranchLabels.size(); ++i) {
+      auto it = labelToNode.find(_wgdBranchLabels[i]);
+      assert(it != labelToNode.end());
+      auto speciesNode = it->second->node_index;
+      _wgdNodes.push_back(speciesNode);
+      _wgdQ.push_back(_wgdRetentions[i]);
+      _wgdResolution.push_back(_wgdResolutionsState[i]);
+      for (auto &evaluation : _evaluations) {
+        evaluation->setWGD(speciesNode, _wgdRetentions[i]);
+      }
+    }
+  }
   unsigned int totalCladesNumber = 0;
   unsigned int worstFamilyCladesNumber = 0;
   for (const auto &evaluation : _evaluations) {
@@ -222,12 +250,24 @@ void AleEvaluator::setWGD(unsigned int speciesNode, double q) {
   for (auto &evaluation : _evaluations) {
     evaluation->setWGD(speciesNode, q);
   }
+  // keep the checkpointed (label-keyed) mirrors in sync
+  auto label = _speciesTree.getTree().getNode(speciesNode)->label;
+  auto labelIt =
+      std::find(_wgdBranchLabels.begin(), _wgdBranchLabels.end(), label);
+  if (labelIt == _wgdBranchLabels.end()) {
+    _wgdBranchLabels.push_back(label);
+    _wgdRetentions.push_back(q);
+    _wgdResolutionsState.push_back(1.0); // mirrors _wgdResolution above
+  } else {
+    _wgdRetentions[std::distance(_wgdBranchLabels.begin(), labelIt)] = q;
+  }
 }
 
 void AleEvaluator::setResolutionProb(double r) {
   _resolutionProb = r;
   // keep the per-event r state consistent on the AORe baseline / revert paths
   std::fill(_wgdResolution.begin(), _wgdResolution.end(), r);
+  std::fill(_wgdResolutionsState.begin(), _wgdResolutionsState.end(), r);
   for (auto &evaluation : _evaluations) {
     evaluation->setResolutionProb(r);
   }
@@ -288,6 +328,10 @@ void AleEvaluator::buildWGDStructure() {
 
 void AleEvaluator::setWGDResolutions(const std::vector<double> &rPerWGD) {
   _wgdResolution = rPerWGD;
+  // keep the checkpointed (label-keyed) mirror in sync: same size/order as
+  // _wgdResolution, since _wgdBranchLabels grows in lockstep with _wgdNodes
+  assert(_wgdResolutionsState.size() == rPerWGD.size());
+  _wgdResolutionsState = rPerWGD;
   // legacy scalar: first resolvable WGD's r (or 1.0)
   _resolutionProb = 1.0;
   for (unsigned int j = 0; j < _wgdNodes.size(); ++j) {

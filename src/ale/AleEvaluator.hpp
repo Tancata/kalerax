@@ -54,6 +54,12 @@ public:
    *  @param mixtureAlpha Reference to the AleState model alpha
    *  @param transferHighways Reference to the AleState transfer highways
    *  @param perLocalFamilyModelParams Reference to the AleState model params
+   *  @param wgdBranchLabels Reference to the AleState WGD branch labels
+   *  @param wgdRetentions Reference to the AleState WGD retentions (aligned
+   *                        with wgdBranchLabels)
+   *  @param wgdResolutions Reference to the AleState per-event LORe
+   *                         resolutions (aligned with wgdBranchLabels)
+   *  @param optimizeResolution Reference to the AleState LORe optimize flag
    *  @param optimizeRates If false, model parameter optimization is skipped
    *  @param optimizeVerbose If true, the optimization routines print more logs
    *  @param families List of all gene families
@@ -65,6 +71,9 @@ public:
                const std::string &optimizationClassFile, double &mixtureAlpha,
                std::vector<Highway> &transferHighways,
                std::vector<AleModelParameters> &perLocalFamilyModelParams,
+               std::vector<std::string> &wgdBranchLabels,
+               std::vector<double> &wgdRetentions,
+               std::vector<double> &wgdResolutions, bool &optimizeResolution,
                bool optimizeRates, bool optimizeVerbose,
                const Families &families, const PerCoreGeneTrees &geneTrees);
 
@@ -318,7 +327,10 @@ private:
   PerCoreMultiEvaluations _approxEvaluations;
   // species branches (node indices) carrying a declared WGD, and the current
   // retention probability of each (aligned with _wgdNodes; used as the warm
-  // start for the retention optimizer)
+  // start for the retention optimizer). Rebuilt from _wgdBranchLabels /
+  // _wgdRetentions / _wgdResolutionsState on construction (e.g. from a
+  // checkpoint), since node indices are not stable across a species tree
+  // reload.
   std::vector<unsigned int> _wgdNodes;
   std::vector<double> _wgdQ;
   // LORe (delayed rediploidization): per-event resolution probability r (one per
@@ -332,9 +344,19 @@ private:
   std::vector<char> _wgdResolvable;
   // node indices of the WGDs whose r is fitted under --lore-wgd (empty => every
   // internal-branch WGD is resolvable, i.e. the default --lore behaviour).
+  // Populated post-construction by declareWGDs() from the (checkpoint-command-
+  // guaranteed-identical) CLI args, so it is not itself checkpointed.
   std::vector<unsigned int> _loreTargets;
+  // AleState-backed, label-keyed mirrors of _wgdNodes / _wgdQ / _wgdResolution:
+  // this is what actually gets checkpointed, so every setWGD() /
+  // setWGDResolutions() call keeps it in sync.
+  std::vector<std::string> &_wgdBranchLabels;
+  std::vector<double> &_wgdRetentions;
+  std::vector<double> &_wgdResolutionsState;
   double _resolutionProb = 1.0;
-  bool _optimizeResolution = false;
+  // Reference into AleState so that it is checkpointed like the other model
+  // parameters.
+  bool &_optimizeResolution;
   // suppress the bulky per-family output (--summary-only)
   bool _summaryOnly = false;
   std::vector<int> _highPrecisions;

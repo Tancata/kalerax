@@ -53,8 +53,9 @@ AleOptimizer::AleOptimizer(const std::string &speciesTreeFile,
   _evaluator = std::make_unique<AleEvaluator>(
       *this, getSpeciesTree(), getRecModelInfo(), modelParametrization,
       optimizationClassFile, getMixtureAlpha(), getTransferHighways(),
-      getModelParameters(), optimizeRates, optimizeVerbose, _families,
-      _geneTrees);
+      getModelParameters(), getWGDBranchLabels(), getWGDRetentions(),
+      getWGDResolutions(), getOptimizeResolution(), optimizeRates,
+      optimizeVerbose, _families, _geneTrees);
   Logger::timed << "Initial ll=" << getEvaluator().computeLikelihood()
                 << std::endl;
 }

@@ -499,6 +499,16 @@ void runReconciliationInference(const AleArguments &args,
  *  NOTE: node indices are tied to the current species tree topology, so a WGD
  *  declared here is only meaningful while the topology is fixed. --wgd is
  *  therefore intended for use with --species-tree-search SKIP.
+ *
+ *  On a resumed run, the WGD retention(s) and per-event LORe resolution(s)
+ *  have already been restored from the checkpoint (by the AleEvaluator
+ *  constructor), reflecting whatever was fitted before the run was
+ *  interrupted. We must NOT re-declare them here from the command-line
+ *  starting values (args.wgds[*].q0, r=0.9), or we would silently discard
+ *  that progress. checkCheckpointCmd already guarantees --wgd/--lore/
+ *  --lore-wgd are unchanged between the original and resumed runs, so
+ *  re-registering the (purely config, non-fitted) --lore-wgd targets and
+ *  rebuilding the WGD subtree structure from them is safe to redo.
  */
 // Resolve a WGD declaration (1 or 2 taxon labels) to a species-tree node. A
 // single label selects that terminal branch; two labels select the branch
@@ -532,8 +542,48 @@ resolveWGDNode(PLLRootedTree &speciesTree,
   return nullptr;
 }
 
-void declareWGDs(const AleArguments &args, AleOptimizer &optimizer) {
+void declareWGDs(const AleArguments &args, AleOptimizer &optimizer,
+                 bool checkpointDetected) {
   if (args.wgds.empty()) {
+    return;
+  }
+  if (checkpointDetected) {
+    auto &speciesTree = optimizer.getSpeciesTree().getTree();
+    auto labelToNode = speciesTree.getLabelToNode(false);
+    auto &evaluator = optimizer.getEvaluator();
+    // --lore-wgd targets are pure config (derived from args, not fitted), so
+    // it's safe -- and necessary -- to re-register them before rebuilding the
+    // WGD subtree structure below.
+    for (const auto &wgd : args.loreWgds) {
+      auto *node = resolveWGDNode(speciesTree, labelToNode, wgd, "--lore-wgd");
+      evaluator.addResolutionTarget(node->node_index);
+    }
+    if (!evaluator.getWGDNodes().empty()) {
+      evaluator.buildWGDStructure();
+      if (evaluator.optimizesResolution()) {
+        // re-apply the fitted per-event r (already restored into
+        // _wgdResolution by the AleEvaluator constructor) to every
+        // evaluation's per-branch resolution vector, which needed the
+        // subtree structure we just (re)built above
+        std::vector<double> restoredR;
+        for (auto node : evaluator.getWGDNodes()) {
+          restoredR.push_back(evaluator.getWGDResolution(node));
+        }
+        evaluator.setWGDResolutions(restoredR);
+      }
+    }
+    for (auto node : evaluator.getWGDNodes()) {
+      Logger::timed << "Restored WGD from checkpoint at node " << node
+                    << ", retention q=" << evaluator.getWGDRetention(node)
+                    << std::endl;
+    }
+    if (evaluator.optimizesResolution()) {
+      for (auto node : evaluator.getWGDNodes()) {
+        Logger::timed << "Restored LORe resolution from checkpoint at node "
+                      << node << ", r=" << evaluator.getWGDResolution(node)
+                      << std::endl;
+      }
+    }
     return;
   }
   if (args.speciesSearchStrategy != SpeciesSearchStrategy::SKIP &&
@@ -642,8 +692,9 @@ void run(AleArguments &args) {
       args.optimizationClassFile, startingRates, !args.fixRates,
       args.optVerbose, args.output);
   speciesTreeOptimizer.getEvaluator().setSummaryOnly(args.summaryOnly);
-  // declare any command-line WGDs on the (now constructed) species tree
-  declareWGDs(args, speciesTreeOptimizer);
+  // declare any command-line WGDs on the (now constructed) species tree, or
+  // restore those already recovered from the checkpoint on a resumed run
+  declareWGDs(args, speciesTreeOptimizer, checkpointDetected);
   if (!checkpointDetected) {
     initCheckpoint(args, families, ckpDir);
     speciesTreeOptimizer.setCurrentStep(AleStep::SpeciesTreeOpt);

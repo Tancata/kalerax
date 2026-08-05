@@ -2,7 +2,6 @@
 
 #include <cassert>
 #include <iostream>
-#include <sstream>
 
 #include <IO/FileSystem.hpp>
 #include <IO/Logger.hpp>
@@ -111,10 +110,20 @@ void AleState::serialize(const std::string &checkpointDir) const {
   // mixture alpha
   os << mixtureAlpha << std::endl;
   // transfer highways
+  os << transferHighways.size() << std::endl;
   for (const auto &highway : transferHighways) {
     os << highway.src->label << " " << highway.dest->label << " "
        << highway.proba << std::endl;
   }
+  // WGD retentions and per-event LORe resolutions
+  assert(wgdBranchLabels.size() == wgdRetentions.size());
+  assert(wgdBranchLabels.size() == wgdResolutions.size());
+  os << wgdBranchLabels.size() << std::endl;
+  for (unsigned int i = 0; i < wgdBranchLabels.size(); ++i) {
+    os << wgdBranchLabels[i] << " " << wgdRetentions[i] << " "
+       << wgdResolutions[i] << std::endl;
+  }
+  os << (optimizeResolution ? 1 : 0) << std::endl;
   os.close();
   ParallelContext::barrier();
   // get the new indexing scheme of the unserialized species tree
@@ -173,23 +182,34 @@ void AleState::unserialize(const std::string &checkpointDir) {
   is >> mixtureAlpha;
   // transfer highways
   auto labelToNode = speciesTree->getTree().getLabelToNode(false);
-  is >> std::ws;
-  std::string line;
-  while (std::getline(is, line)) {
-    if (line.size()) {
-      std::string src;
-      std::string dest;
-      double proba;
-      std::istringstream iss(line);
-      iss >> src;
-      iss >> dest;
-      iss >> proba;
-      Highway highway(labelToNode.find(src)->second,
-                      labelToNode.find(dest)->second);
-      highway.proba = proba;
-      transferHighways.push_back(highway);
-    }
+  unsigned int highwaysNumber = 0;
+  is >> highwaysNumber;
+  for (unsigned int i = 0; i < highwaysNumber; ++i) {
+    std::string src;
+    std::string dest;
+    double proba = 0.0;
+    is >> src;
+    is >> dest;
+    is >> proba;
+    Highway highway(labelToNode.find(src)->second,
+                    labelToNode.find(dest)->second);
+    highway.proba = proba;
+    transferHighways.push_back(highway);
   }
+  // WGD retentions and per-event LORe resolutions
+  unsigned int wgdsNumber = 0;
+  is >> wgdsNumber;
+  wgdBranchLabels.resize(wgdsNumber);
+  wgdRetentions.resize(wgdsNumber);
+  wgdResolutions.resize(wgdsNumber);
+  for (unsigned int i = 0; i < wgdsNumber; ++i) {
+    is >> wgdBranchLabels[i];
+    is >> wgdRetentions[i];
+    is >> wgdResolutions[i];
+  }
+  unsigned int optimizeResolutionInt = 0;
+  is >> optimizeResolutionInt;
+  optimizeResolution = (optimizeResolutionInt != 0);
   is.close();
   // param vectors
   for (const auto &family : localFamilyNames) {

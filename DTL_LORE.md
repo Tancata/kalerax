@@ -145,10 +145,10 @@ writes per-family sampled gene trees to `reconciliations/all/` (~150 GB for the
 profile is needed for the LORe readout; delete `all/` after a run if disk is
 tight.
 
-**Caveat — checkpoint resume does not restore q/r.** `AleState` does not
-serialise the WGD retention `q` or the LORe resolution `r`, and a checkpoint
-resume skips the retention/resolution optimisation. So **resuming** a
-`--wgd … --lore` run reconciles with the *starting* q/r (q0, r=0.9), not the
-fitted values — `wgdSummary.txt` will show those starting values. Run the
-analysis **in one process** (do not resume) when you need the resolution profile
-under the fitted q/r.
+**Fixed — checkpoint resume now restores q/r.** `AleState` serialises the WGD
+retention(s) `q` and the per-event LORe resolution(s) `r` (by branch label, so
+they survive a species-tree node reindex), and `declareWGDs()` no longer
+re-declares them from the command-line starting values (q0, r=0.9) on a
+resumed run. Resuming a `--wgd … --lore` run after the retention/resolution
+optimisation has completed now reconciles with the *fitted* q/r, matching an
+uninterrupted run bit-for-bit (`tests/checkpoint_lore_regression.sh`).

@@ -120,6 +120,12 @@ public:
   std::vector<AleModelParameters> &getModelParameters() {
     return _state.perLocalFamilyModelParams;
   }
+  std::vector<std::string> &getWGDBranchLabels() {
+    return _state.wgdBranchLabels;
+  }
+  std::vector<double> &getWGDRetentions() { return _state.wgdRetentions; }
+  std::vector<double> &getWGDResolutions() { return _state.wgdResolutions; }
+  bool &getOptimizeResolution() { return _state.optimizeResolution; }
   // likelihood evaluator
   AleEvaluator &getEvaluator() { return *_evaluator; }
 

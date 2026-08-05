@@ -37,7 +37,9 @@ struct AleState {
   /**
    *  Constructor
    */
-  AleState() : currentStep(AleStep::Init), mixtureAlpha(1.0) {}
+  AleState()
+      : currentStep(AleStep::Init), mixtureAlpha(1.0),
+        optimizeResolution(false) {}
 
   /**
    *  Dump the current run arguments to the checkpoint directory
@@ -92,4 +94,15 @@ struct AleState {
   // the names of the families, to map the model parameters to their
   // respective families
   std::vector<std::string> localFamilyNames;
+  // WGDs: the species branch (by label, since node indices are not stable
+  // across a species tree reload) carrying each declared WGD, its current
+  // (possibly fitted) retention probability q, and its current (possibly
+  // fitted) per-event LORe resolution probability r (1.0 == AORe / not
+  // resolvable). All three vectors are aligned.
+  std::vector<std::string> wgdBranchLabels;
+  std::vector<double> wgdRetentions;
+  std::vector<double> wgdResolutions;
+  // LORe: whether the resolution probability(ies) are being jointly
+  // optimized with the WGD retentions (mirrors --lore / --lore-wgd)
+  bool optimizeResolution;
 };
