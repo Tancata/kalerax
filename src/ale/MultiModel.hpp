@@ -4,6 +4,15 @@
 #include <ccp/ConditionalClades.hpp>
 #include <likelihoods/reconciliation_models/BaseReconciliationModel.hpp>
 
+#include "Synteny.hpp"
+
+#include <cmath>
+#include <string>
+#include <unordered_map>
+#include <unordered_set>
+#include <utility>
+#include <vector>
+
 /**
  *  Temp storage for a clade event sampled in
  *  the reconciliation space
@@ -64,6 +73,34 @@ public:
     tetraCounts.clear();
   }
 
+
+  // --- Synteny (Layer 1) -------------------------------------------------
+  // Observation per same-genome gene pair (g,h): y=1 (anchor pair of a
+  // collinear duplicated block), y=0 (both placed, not collinear), or NA.
+  // Every same-genome pair has exactly one LCA in a reconciled gene tree; the
+  // pair's emission is Bernoulli(sigma_W) if that LCA is a WGD split (AORe
+  // doubling or LORe U->R resolution) and Bernoulli(sigma_N) otherwise. Hence
+  //   P(Y | rec) = C(sigma_N) * prod_{WGD splits} rho(split),
+  //   C = prod_pairs f_N(y),  rho = prod_{pairs across split} f_W(y)/f_N(y),
+  // Numerically, each pair's emission is factored by m = max(f_W, f_N), so
+  //   P(Y | rec) = Cm * prod_{non-WGD splits} wN(split) * prod_{WGD} wW(split)
+  //   Cm = prod_pairs m(y),  wX(split) = prod_{pairs across} f_X(y)/m(y) <= 1.
+  // wN is folded into the CCP split frequencies (all S/D/T/U-speciation
+  // terms), wW replaces the frequency in the WGD doubling-bracket split term,
+  // and log Cm is added to the family log-likelihood. All weights are <= 1,
+  // so every CLV stays a (sub-)probability. No synteny => weights 1, Cm = 1.
+  using SyntenyInput = ::SyntenyInput;
+  // Count, for every clade split, the same-species cross pairs with y=1 / y=0.
+  void setSynteny(const SyntenyInput &in);
+  // Recompute rho and log C for the given emission parameters.
+  void setSyntenyParams(double sigmaW, double sigmaN);
+  bool hasSynteny() const { return _synActive; }
+  // total observed pairs (y=1, y=0) in this family, for logging
+  void getSyntenyTotals(unsigned int &n1, unsigned int &n0) const {
+    n1 = _synTot1;
+    n0 = _synTot0;
+  }
+
   virtual double computeLogLikelihood() = 0;
 
   virtual bool inferMLScenario(Scenario &scenario) = 0;
@@ -84,6 +121,28 @@ protected:
   const bool _memorySavings;
   ConditionalClades _ccp;
   std::unordered_map<size_t, double> _llCache;
+
+  // --- Synteny (Layer 1) state ---
+  bool _synActive = false;
+  std::vector<std::vector<unsigned int>> _synN1; // per cid, per split
+  std::vector<std::vector<unsigned int>> _synN0;
+  std::vector<std::vector<double>> _synOrigFreq; // unweighted ccp frequencies
+  std::vector<std::vector<double>> _synWFreq;    // WGD-split frequency * wW
+  double _synLogConst = 0.0;                     // log Cm
+  unsigned int _synTot1 = 0;
+  unsigned int _synTot0 = 0;
+  // frequency to use for split k of clade cid in the WGD doubling bracket
+  double synWgdFreq(CID cid, size_t k, double freq) const {
+    return _synActive ? _synWFreq[cid][k] : freq;
+  }
+  void restoreSyntenyFrequencies() {
+    for (size_t cid = 0; cid < _synOrigFreq.size(); ++cid) {
+      auto &splits = _ccp.getCladeSplitsMutable(cid);
+      for (size_t k = 0; k < splits.size(); ++k) {
+        splits[k].frequency = _synOrigFreq[cid][k];
+      }
+    }
+  }
 };
 
 inline void MultiModelInterface::mapGenesToSpecies() {
@@ -106,6 +165,131 @@ inline void MultiModelInterface::mapGenesToSpecies() {
   // build the pruned species tree representation based
   // on the species coverage
   onSpeciesTreeChange(nullptr);
+}
+
+
+inline void MultiModelInterface::setSynteny(const SyntenyInput &in) {
+  restoreSyntenyFrequencies(); // idempotent if synteny was set before
+  const auto nClades = _ccp.getCladesNumber();
+  // leaves per clade, bucketed by species: cid -> {species -> leaf cids}
+  std::vector<std::unordered_map<unsigned int, std::vector<CID>>> bySpecies(
+      nClades);
+  const auto &cidToLeaves = _ccp.getCidToLeaves();
+  for (CID cid = 0; cid < nClades; ++cid) {
+    if (_ccp.isLeaf(cid)) {
+      bySpecies[cid][this->_geneToSpecies[cid]].push_back(cid);
+    } else {
+      const auto &splits = _ccp.getCladeSplits(cid);
+      assert(!splits.empty());
+      const auto &cs = splits[0]; // any split partitions the same leaf set
+      for (auto *side : {&bySpecies[cs.left], &bySpecies[cs.right]}) {
+        for (const auto &kv : *side) {
+          auto &dst = bySpecies[cid][kv.first];
+          dst.insert(dst.end(), kv.second.begin(), kv.second.end());
+        }
+      }
+    }
+  }
+  auto obs = [&](CID a, CID b) -> int { // 1, 0, or -1 (NA)
+    const auto &ga = cidToLeaves.at(a);
+    const auto &gb = cidToLeaves.at(b);
+    if (in.naGenes.count(ga) || in.naGenes.count(gb)) {
+      return -1;
+    }
+    auto key = syntenyKey(ga, gb);
+    if (in.naPairs.count(key)) {
+      return -1;
+    }
+    auto it = in.pairObs.find(key);
+    if (it != in.pairObs.end()) {
+      return it->second;
+    }
+    return in.unlistedNA ? -1 : 0;
+  };
+  _synN1.assign(nClades, {});
+  _synN0.assign(nClades, {});
+  _synTot1 = 0;
+  _synTot0 = 0;
+  for (CID cid = 0; cid < nClades; ++cid) {
+    const auto &splits = _ccp.getCladeSplits(cid);
+    _synN1[cid].assign(splits.size(), 0);
+    _synN0[cid].assign(splits.size(), 0);
+    for (size_t k = 0; k < splits.size(); ++k) {
+      const auto &L = bySpecies[splits[k].left];
+      const auto &R = bySpecies[splits[k].right];
+      for (const auto &kv : L) {
+        auto it = R.find(kv.first);
+        if (it == R.end()) {
+          continue;
+        }
+        for (auto a : kv.second) {
+          for (auto b : it->second) {
+            int y = obs(a, b);
+            if (y == 1) {
+              _synN1[cid][k]++;
+            } else if (y == 0) {
+              _synN0[cid][k]++;
+            }
+          }
+        }
+      }
+    }
+  }
+  // family totals: every same-species leaf pair, counted once (root clade's
+  // leaf set is the whole family)
+  const CID root = nClades - 1;
+  for (const auto &kv : bySpecies[root]) {
+    const auto &v = kv.second;
+    for (size_t i = 0; i < v.size(); ++i) {
+      for (size_t j = i + 1; j < v.size(); ++j) {
+        int y = obs(v[i], v[j]);
+        if (y == 1) {
+          _synTot1++;
+        } else if (y == 0) {
+          _synTot0++;
+        }
+      }
+    }
+  }
+  _synActive = (_synTot1 + _synTot0) > 0;
+  _synOrigFreq.assign(nClades, {});
+  for (CID cid = 0; cid < nClades; ++cid) {
+    for (const auto &cs : _ccp.getCladeSplits(cid)) {
+      _synOrigFreq[cid].push_back(cs.frequency);
+    }
+  }
+  if (!_synActive) {
+    _synN1.clear();
+    _synN0.clear();
+    _synWFreq.clear();
+    _synOrigFreq.clear();
+    _synLogConst = 0.0;
+  }
+}
+
+inline void MultiModelInterface::setSyntenyParams(double sigmaW,
+                                                  double sigmaN) {
+  if (!_synActive) {
+    return;
+  }
+  const double lw1 = std::log(sigmaW), lw0 = std::log(1.0 - sigmaW);
+  const double ln1 = std::log(sigmaN), ln0 = std::log(1.0 - sigmaN);
+  const double lm1 = std::max(lw1, ln1), lm0 = std::max(lw0, ln0);
+  _synLogConst = _synTot1 * lm1 + _synTot0 * lm0;
+  _synWFreq.assign(_synN1.size(), {});
+  for (size_t cid = 0; cid < _synN1.size(); ++cid) {
+    auto &splits = _ccp.getCladeSplitsMutable(cid);
+    _synWFreq[cid].resize(splits.size());
+    for (size_t k = 0; k < splits.size(); ++k) {
+      const double n1 = _synN1[cid][k], n0 = _synN0[cid][k];
+      const double lwN = n1 * (ln1 - lm1) + n0 * (ln0 - lm0); // <= 0
+      const double lwW = n1 * (lw1 - lm1) + n0 * (lw0 - lm0); // <= 0
+      splits[k].frequency = _synOrigFreq[cid][k] * std::exp(lwN);
+      _synWFreq[cid][k] = _synOrigFreq[cid][k] * std::exp(lwW);
+    }
+  }
+  this->invalidateAllSpeciesNodes();
+  this->resetCache();
 }
 
 /**
@@ -175,6 +359,37 @@ protected:
                      REAL &proba,
                      ReconciliationCell<REAL> *recCell = nullptr) = 0;
 
+
+  // --- WGD / LORe-aware scenario sampling (fix for the export backbone) ---
+  // A parent's S/SL term consumes the WGD-transformed child value
+  //   R_top = (1-q) R + q U,
+  // so the sampler must choose R vs U with exactly those weights before
+  // sampling the child's events (sampleWGDCoin), and must be able to sample
+  // the U recursion itself (sampleUEvent). Models without WGD keep defaults.
+  struct UEventSample {
+    enum Type {
+      RESOLVE_SPLIT,  // U->R with both copies observed: WGD ohnolog split
+      RESOLVE_SINGLE, // U->R, one copy lost (2*E*R term): no gene node
+      SPECIATE,       // unresolved speciation, both daughters stay U
+      SPECIATE_LOSS,  // unresolved speciation, one daughter lost
+      LEAF            // still unresolved at an extant tip: seen as 1 gene
+    } type = LEAF;
+    CID left = 0, right = 0;     // RESOLVE_SPLIT / SPECIATE gene clades
+    double blLeft = 0.0, blRight = 0.0;
+    bool leftToLeftSpecies = true; // SPECIATE: left clade -> left species
+    corax_rnode_t *dest = nullptr; // SPECIATE_LOSS: surviving species
+    corax_rnode_t *lost = nullptr; // SPECIATE_LOSS: lost species
+  };
+  // true => the lineage enters the U state at the top of branch sp
+  virtual bool sampleWGDCoin(CID /*cid*/, corax_rnode_t * /*sp*/,
+                             unsigned int /*category*/) {
+    return false;
+  }
+  virtual bool sampleUEvent(CID /*cid*/, corax_rnode_t * /*sp*/,
+                            unsigned int /*category*/, UEventSample & /*ev*/) {
+    return false;
+  }
+
   /**
    *  Return a uniform random REAL from the [0,max) interval
    */
@@ -220,6 +435,13 @@ private:
    */
   bool backtrace(CID cid, corax_rnode_t *speciesNode, corax_unode_t *geneNode,
                  unsigned int category, Scenario &scenario, bool stochastic);
+  // descend into a child species branch through its WGD (R/U coin)
+  bool descend(CID cid, corax_rnode_t *speciesNode, corax_unode_t *geneNode,
+               unsigned int category, Scenario &scenario, bool stochastic);
+  // sample the unresolved (U) state at (cid, speciesNode)
+  bool backtraceU(CID cid, corax_rnode_t *speciesNode,
+                  corax_unode_t *geneNode, unsigned int category,
+                  Scenario &scenario, bool stochastic);
 
   // Backtrace recursion-depth guard. The reconciliation backtrace recurses on
   // the DL/TL "nothing observed, resample" events; at a degenerate cell (where
@@ -248,7 +470,7 @@ template <class REAL> double MultiModel<REAL>::computeLogLikelihood() {
     // too many collisions for dated getHash(),
     // delete the condition line upon fixing
     if (!this->_info.isDated())
-      return cacheIt->second;
+      return cacheIt->second + this->_synLogConst;
   }
   if (this->_memorySavings) {
     // initialize CLVs, as they have not been created with the model
@@ -280,7 +502,7 @@ template <class REAL> double MultiModel<REAL>::computeLogLikelihood() {
     // delete CLVs to use less RAM
     deallocateMemory();
   }
-  return ll;
+  return ll + this->_synLogConst; // synteny emission constant (0 if none)
 }
 
 template <class REAL>
@@ -457,11 +679,11 @@ bool MultiModel<REAL>::backtrace(CID cid, corax_rnode_t *speciesNode,
   switch (recCell.event.type) {
   case ReconciliationEventType::EVENT_S:
     scenario.setLastEventType(recCell.event.type);
-    ok &= backtrace(leftCid, this->getSpeciesLeft(speciesNode), leftGeneNode, c,
-                    scenario, stochastic);
+    ok &= descend(leftCid, this->getSpeciesLeft(speciesNode), leftGeneNode, c,
+                  scenario, stochastic);
     scenario.setLastEventType(recCell.event.type);
-    ok &= backtrace(rightCid, this->getSpeciesRight(speciesNode), rightGeneNode,
-                    c, scenario, stochastic);
+    ok &= descend(rightCid, this->getSpeciesRight(speciesNode), rightGeneNode,
+                  c, scenario, stochastic);
     break;
   case ReconciliationEventType::EVENT_D:
     scenario.setLastEventType(recCell.event.type);
@@ -482,8 +704,8 @@ bool MultiModel<REAL>::backtrace(CID cid, corax_rnode_t *speciesNode,
     break;
   case ReconciliationEventType::EVENT_SL:
     scenario.setLastEventType(recCell.event.type);
-    ok &= backtrace(cid, recCell.event.pllDestSpeciesNode, geneNode, c,
-                    scenario, stochastic);
+    ok &= descend(cid, recCell.event.pllDestSpeciesNode, geneNode, c,
+                  scenario, stochastic);
     break;
   case ReconciliationEventType::EVENT_DL:
     // the gene got duplicated, but one copy was lost, we resample again
@@ -507,6 +729,105 @@ bool MultiModel<REAL>::backtrace(CID cid, corax_rnode_t *speciesNode,
     break;
   default:
     ok = false;
+  }
+  return ok;
+}
+
+template <class REAL>
+bool MultiModel<REAL>::descend(CID cid, corax_rnode_t *speciesNode,
+                               corax_unode_t *geneNode, unsigned int category,
+                               Scenario &scenario, bool stochastic) {
+  if (sampleWGDCoin(cid, speciesNode, category)) {
+    return backtraceU(cid, speciesNode, geneNode, category, scenario,
+                      stochastic);
+  }
+  return backtrace(cid, speciesNode, geneNode, category, scenario, stochastic);
+}
+
+template <class REAL>
+bool MultiModel<REAL>::backtraceU(CID cid, corax_rnode_t *speciesNode,
+                                  corax_unode_t *geneNode,
+                                  unsigned int category, Scenario &scenario,
+                                  bool stochastic) {
+  struct DepthGuard {
+    size_t &d;
+    DepthGuard(size_t &x) : d(x) { ++d; }
+    ~DepthGuard() { --d; }
+  } depthGuard(_btScenarioSteps);
+  if (_btScenarioSteps > kBtScenarioCap) {
+    return false;
+  }
+  UEventSample ev;
+  if (!sampleUEvent(cid, speciesNode, category, ev)) {
+    return false;
+  }
+  auto makeEvent = [&](ReconciliationEventType type) {
+    Scenario::Event event;
+    event.type = type;
+    event.geneNode = (scenario.getGeneNodeBuffer().size() == 1)
+                         ? scenario.getVirtualRootIndex()
+                         : geneNode->node_index;
+    event.speciesNode = speciesNode->node_index;
+    event.previousType = scenario.getLastEventType();
+    return event;
+  };
+  bool ok = true;
+  switch (ev.type) {
+  case UEventSample::RESOLVE_SPLIT: {
+    // the WGD ohnolog split: a duplication node flagged isWGD
+    auto event = makeEvent(ReconciliationEventType::EVENT_D);
+    event.isWGD = true;
+    corax_unode_t *l = nullptr, *r = nullptr;
+    scenario.generateGeneChildren(geneNode, l, r);
+    l->length = ev.blLeft;
+    r->length = ev.blRight;
+    event.leftGeneIndex = l->node_index;
+    event.rightGeneIndex = r->node_index;
+    scenario.addEvent(event);
+    scenario.setLastEventType(ReconciliationEventType::EVENT_D);
+    ok &= backtrace(ev.left, speciesNode, l, category, scenario, stochastic);
+    scenario.setLastEventType(ReconciliationEventType::EVENT_D);
+    ok &= backtrace(ev.right, speciesNode, r, category, scenario, stochastic);
+    break;
+  }
+  case UEventSample::RESOLVE_SINGLE:
+    // one ohnolog lost: nothing observed, continue resolved on this branch
+    ok &= backtrace(cid, speciesNode, geneNode, category, scenario, stochastic);
+    break;
+  case UEventSample::SPECIATE: {
+    auto event = makeEvent(ReconciliationEventType::EVENT_S);
+    corax_unode_t *l = nullptr, *r = nullptr;
+    scenario.generateGeneChildren(geneNode, l, r);
+    // l goes to the left species, r to the right species
+    CID cl = ev.leftToLeftSpecies ? ev.left : ev.right;
+    CID cr = ev.leftToLeftSpecies ? ev.right : ev.left;
+    l->length = ev.leftToLeftSpecies ? ev.blLeft : ev.blRight;
+    r->length = ev.leftToLeftSpecies ? ev.blRight : ev.blLeft;
+    event.leftGeneIndex = l->node_index;
+    event.rightGeneIndex = r->node_index;
+    scenario.addEvent(event);
+    scenario.setLastEventType(ReconciliationEventType::EVENT_S);
+    ok &= backtraceU(cl, this->getSpeciesLeft(speciesNode), l, category,
+                     scenario, stochastic);
+    scenario.setLastEventType(ReconciliationEventType::EVENT_S);
+    ok &= backtraceU(cr, this->getSpeciesRight(speciesNode), r, category,
+                     scenario, stochastic);
+    break;
+  }
+  case UEventSample::SPECIATE_LOSS: {
+    auto event = makeEvent(ReconciliationEventType::EVENT_SL);
+    event.lostSpeciesNode = ev.lost->node_index;
+    event.pllDestSpeciesNode = ev.dest;
+    event.pllLostSpeciesNode = ev.lost;
+    scenario.addEvent(event);
+    scenario.setLastEventType(ReconciliationEventType::EVENT_SL);
+    ok &= backtraceU(cid, ev.dest, geneNode, category, scenario, stochastic);
+    break;
+  }
+  case UEventSample::LEAF:
+    // (1-r) R at a tip: the unresolved locus is observed as a single gene
+    ok &= backtrace(cid, speciesNode, geneNode, category, scenario, stochastic);
+    break;
   }
   return ok;
 }

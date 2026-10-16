@@ -127,6 +127,13 @@ public:
   // global totals, wgdSummary, species trees, model parameters and logs.
   bool summaryOnly;
 
+  // synteny (Layer 1): per-family <dir>/<family>.syn pair observations
+  std::string syntenyDir;
+  double sigmaW0;
+  double sigmaN0;
+  bool fixSynteny;
+  bool syntenyUnlistedNA;
+
   // random seed
   int seed;
 

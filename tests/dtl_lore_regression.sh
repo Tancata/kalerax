@@ -46,25 +46,29 @@ ll() { grep -E "Final species tree likelihood" "$1" | tail -1 |
 
 echo "binary: $BIN"
 "$BIN" "${common[@]}" -g 1 -p "$TMP/null"  >"$TMP/null.log"  2>&1
-"$BIN" "${common[@]}" -g 1 --wgd "$WGD" -p "$TMP/aore" >"$TMP/aore.log" 2>&1
-"$BIN" "${common[@]}" -g 5 --wgd "$WGD" --lore -p "$TMP/lore" >"$TMP/lore.log" 2>&1
-
-LN=$(ll "$TMP/null.log"); LA=$(ll "$TMP/aore.log"); LL=$(ll "$TMP/lore.log")
-RHAT=$(grep -E "After WGD\+LORe opt" "$TMP/lore.log" | tail -1 |
-       sed -E 's/.* r=//')
+LN=$(ll "$TMP/null.log")
 echo "  lnL_null (DTL)            = $LN"
-echo "  lnL_aore (DTL+WGD, r=1)   = $LA"
-echo "  lnL_lore (DTL+WGD+--lore) = $LL   r_hat=${RHAT:-NA}"
 
-# also confirm the resolution profile was written and is confined to the clade
-test -s "$TMP/lore/reconciliations/totalSpeciesResolutionCounts.txt" \
-  || { echo "FAIL: no resolution profile written"; exit 1; }
-
-# r=1 is a valid outcome: on a terminal WGD branch (or with no delayed-resolution
-# signal) the LORe optimizer correctly reverts to AORe (r=1).
-awk -v ln="$LN" -v la="$LA" -v ll="$LL" -v r="${RHAT:-2}" 'BEGIN{
-  if (la < ln - 1e-6) { print "FAIL: AORe < null (not nested)"; exit 1 }
-  if (ll < la - 1e-6) { print "FAIL: LORe < AORe (LORe must dominate)"; exit 1 }
-  if (r < -1e-9 || r > 1 + 1e-9) { print "FAIL: r_hat outside [0,1]"; exit 1 }
-  print "PASS: null <= AORe <= LORe, r_hat in [0,1]"
-}'
+# Two WGD placements: the moss terminal branch (r pinned to 1 by design) and
+# the internal angiosperm crown branch (r free: exercises DTL+LORe proper).
+status=0
+for WGD in PPAT ATHA,ATRI; do
+  tag=$(echo "$WGD" | tr ',' '_')
+  "$BIN" "${common[@]}" -g 1 --wgd "$WGD" -p "$TMP/aore_$tag" >"$TMP/aore_$tag.log" 2>&1
+  "$BIN" "${common[@]}" -g 5 --wgd "$WGD" --lore -p "$TMP/lore_$tag" >"$TMP/lore_$tag.log" 2>&1
+  LA=$(ll "$TMP/aore_$tag.log"); LL=$(ll "$TMP/lore_$tag.log")
+  # per-event log format: "... r[node N]=<value>[(pinned;...)]"
+  RHAT=$(grep -E "After WGD\+LORe opt" "$TMP/lore_$tag.log" | tail -1 |
+         sed -E 's/.* r\[node [0-9]+\]=([0-9.eE+-]+).*/\1/')
+  echo "  [$WGD] lnL_aore (r=1) = $LA   lnL_lore = $LL   r_hat=${RHAT:-NA}"
+  test -s "$TMP/lore_$tag/reconciliations/totalSpeciesResolutionCounts.txt" \
+    || { echo "FAIL: [$WGD] no resolution profile written"; exit 1; }
+  awk -v ln="$LN" -v la="$LA" -v ll="$LL" -v r="${RHAT:-2}" -v w="$WGD" 'BEGIN{
+    if (la < ln - 1e-6) { print "FAIL: [" w "] AORe < null (not nested)"; exit 1 }
+    if (ll < la - 1e-6) { print "FAIL: [" w "] LORe < AORe (LORe must dominate)"; exit 1 }
+    if (r < -1e-9 || r > 1 + 1e-9) { print "FAIL: [" w "] r_hat outside [0,1]"; exit 1 }
+    print "  PASS: [" w "] null <= AORe <= LORe, r_hat in [0,1]"
+  }' || status=1
+done
+[ $status -eq 0 ] && echo "PASS: DTL+LORe nesting holds (terminal and internal WGD)"
+exit $status

@@ -15,6 +15,33 @@ how many duplicated copies were retained) the way
 while reusing AleRax's fast amalgamated-likelihood machinery and extending it to
 the duplication–transfer–loss (DTL) model.
 
+> **Changes (October 2026).**
+> 1. *Export fix.* Exported reconciliations (event counts, sampled gene trees,
+>    RecPhyloXML, transfers) previously ignored the WGD: the scenario sampler
+>    chose a speciation with the WGD-transformed child value but sampled the
+>    child from the raw value, so ohnolog splits were exported as SSDs (24 of 24
+>    on a toy with q̂ = 0.999) and, under LORe/DTL, as spurious transfers. The
+>    sampler now draws the WGD R/U choice and the U state with the exact inside
+>    weights; WGD ohnolog splits are counted in a new `wgd_duplications` column
+>    (the `duplications` column is SSD-only) and labelled `W` / `:WGD=Y` in
+>    sampled gene trees. LORe backbones are sampled at the fitted r (the former
+>    r = 1 workaround is gone). Validated against the exact posterior
+>    (`tests/export_consistency.sh`).
+> 2. *Normalised U state.* An unresolved (U) lineage has no duplication (DL) or
+>    transfer/highway (DTL) channel, so its speciation and loss probabilities are
+>    renormalised over P_S + P_L. Previously the U process lost (1−r)·P_D (DL) or
+>    (1−r)·(P_D + P_T + highways) (DTL) probability per branch, which biased r̂
+>    towards 1. AORe (r = 1) and no-WGD likelihoods are unchanged bit-for-bit.
+> 3. *Precision rebuild.* A family whose likelihood underflows double precision
+>    is rebuilt in high precision; this rebuild previously dropped the WGD q and
+>    LORe r, so the largest families were silently evaluated (and exported)
+>    without the WGD after `resetAllPrecisions()` (final lnL off by 323 units on
+>    `tests/precision_rebuild_regression.sh`). The state is now re-applied.
+> 4. *Optimiser.* The q/r golden-section refinement now evaluates the interval
+>    endpoints and keeps the best point seen, so q̂ = 0 (no WGD) is reachable
+>    exactly (AORe can no longer score below the null).
+> 5. *Synteny.* `--synteny-dir` (see [`SYNTENY.md`](SYNTENY.md)).
+
 > **Status:** research prototype. The model is implemented and validated against
 > WHALE on a small published dataset. It is a *scaffold* — see *Limitations*.
 
@@ -320,10 +347,11 @@ signal) `r̂ → 1` and the model ties AORe.
 - **Undated model.** Unlike WHALE, AleRax `UndatedDL/DTL` ignore branch lengths,
   which is why absolute `q̂`/LRT differ from WHALE. Only relative comparisons
   (DL vs DTL, branch vs branch) should be trusted across the two tools.
-- **No synteny.** From gene trees alone, a WGD is **not identifiable** against a
-  burst of small-scale duplications on the same branch. This DL/DTL+WGD model is
-  a scaffold; distinguishing the two would need a synteny-block coupling layer
-  (a planned future direction).
+- **Synteny is optional.** From gene trees alone, a WGD is **not identifiable**
+  against a burst of small-scale duplications on the same branch (nor LORe
+  against parallel SSDs). `--synteny-dir` adds a pair-level collinearity
+  emission (Layer 1, [`SYNTENY.md`](SYNTENY.md)); block-coupled resolution
+  histories (Layer 2) are a planned extension.
 - The DTL WGD/LORe port is covered by empirical regression checks (no-WGD and
   r=1/AORe likelihoods reproduced bit-for-bit; backtrace consistency guard;
   `tests/dtl_lore_regression.sh`) rather than a dedicated C++ unit test.
@@ -336,7 +364,7 @@ signal) `r̂ → 1` and the model ties AORe.
 # build (no MPI):
 mkdir build && cd build
 cmake .. -DCMAKE_BUILD_TYPE=Release -DDISABLE_MPI=ON
-cmake --build . --target kalerax wgd_regression lore_marginal -j4
+cmake --build . --target kalerax wgd_regression lore_marginal export_consistency -j4
 
 # WGD regression + LORe r=1 gate (no-WGD == stock, q->0, r=1 == WHALE):
 ./bin/wgd_regression <species_tree> <gene_trees> <mapping>
@@ -359,8 +387,15 @@ cmake --build . --target kalerax wgd_regression lore_marginal -j4
 # suppress the bulky per-family output (GB-scale); keep summaries + logs:
 ./bin/kalerax ... --wgd ... --lore --summary-only -p out
 
-# DTL+LORe regression gate (null <= AORe <= LORe on validation/example-1):
+# DTL+LORe regression gate (null <= AORe <= LORe on validation/example-1,
+# terminal (PPAT) and internal (ATHA,ATRI) WGD):
 bash tests/dtl_lore_regression.sh ./bin/kalerax
+
+# exported scenarios == exact posterior (needs the export_consistency target):
+bash tests/export_consistency.sh ./bin
+# precision rebuild keeps the WGD; synteny emission gates:
+bash tests/precision_rebuild_regression.sh ./bin/kalerax
+bash tests/synteny_regression.sh ./bin/kalerax
 
 # Per-event r gate (disjoint WGDs -> distinct r-hat; terminal pinning; nested
 # abort; --lore-wgd single-target incl. nested; --summary-only suppression) on a

@@ -128,6 +128,7 @@ public:
   bool &getOptimizeResolution() { return _state.optimizeResolution; }
   // likelihood evaluator
   AleEvaluator &getEvaluator() { return *_evaluator; }
+  std::vector<double> &getSyntenyParams() { return _state.syntenyParams; }
 
 private:
   double rootSearch(unsigned int maxDepth, bool thorough = false);

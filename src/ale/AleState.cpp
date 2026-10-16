@@ -124,6 +124,12 @@ void AleState::serialize(const std::string &checkpointDir) const {
        << wgdResolutions[i] << std::endl;
   }
   os << (optimizeResolution ? 1 : 0) << std::endl;
+  // synteny emission parameters (appended; absent in older checkpoints)
+  os << syntenyParams.size();
+  for (auto v : syntenyParams) {
+    os << " " << v;
+  }
+  os << std::endl;
   os.close();
   ParallelContext::barrier();
   // get the new indexing scheme of the unserialized species tree
@@ -210,6 +216,14 @@ void AleState::unserialize(const std::string &checkpointDir) {
   unsigned int optimizeResolutionInt = 0;
   is >> optimizeResolutionInt;
   optimizeResolution = (optimizeResolutionInt != 0);
+  unsigned int synN = 0;
+  syntenyParams.clear();
+  if (is >> synN) {
+    syntenyParams.resize(synN);
+    for (unsigned int i = 0; i < synN; ++i) {
+      is >> syntenyParams[i];
+    }
+  }
   is.close();
   // param vectors
   for (const auto &family : localFamilyNames) {

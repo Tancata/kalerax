@@ -19,7 +19,14 @@ where it happens).
 - `r = 1` → resolution certain at the WGD branch → **AORe** (immediate, WHALE-like);
 - `r < 1` → resolution can be **delayed** into descendant lineages → **LORe**.
 
-`r` is a single global parameter, fitted jointly with `q` by maximum likelihood.
+`r` is fitted **per declared WGD** (one `r` per `--wgd`, pooled over families),
+jointly with `q` by maximum likelihood.
+
+**Normalisation.** A U lineage is vertical-only (no D, T or highway channel),
+so its per-branch event probabilities are P_S/(P_S+P_L) and P_L/(P_S+P_L).
+(Before October 2026 the unnormalised P_S, P_L were used, which made the U
+process defective and biased r̂ towards 1; AORe and no-WGD likelihoods are
+unaffected.)
 
 ## How the DTL port works
 
@@ -96,6 +103,20 @@ kalerax -f families.txt -s species_tree.nw --rec-model UndatedDTL \
   resolution-timing profile is stable across the two, transfers are not driving
   the LORe signal.
 - Like the rest of the WGD/LORe code, this is a research prototype.
+
+## Resolved issue: exported scenarios ignored the WGD (October 2026)
+
+The stock scenario sampler (`MultiModel::backtrace`) picked a speciation using
+the WGD-transformed child value (`_uqTop`) but then sampled the child's event
+from the raw value, so the q·U mass was never sampled. Ohnolog splits were
+exported as SSDs (DL) or as D/T (DTL), and under LORe the species-grouped
+ohnologs appeared as a spray of transfers. That mismatch was also the root
+cause of the degenerate resample chains described below. The sampler now
+descends through the WGD R/U coin and samples the U recursion
+(`MultiModel::descend` / `backtraceU`, model hooks `sampleWGDCoin` /
+`sampleUEvent`, shared with the resolution-profile sampler). WGD ohnolog splits
+are exported as `isWGD` duplications (`wgd_duplications` column, `W` label), and
+the backbone is sampled at the fitted r.
 
 ## Resolved issue: reconciliation-export stack overflow
 

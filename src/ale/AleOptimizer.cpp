@@ -481,9 +481,10 @@ void AleOptimizer::reconcile(unsigned int samples) {
       break;
     }
   }
-  if (wgdActiveLORe) {
-    _evaluator->setResolutionProb(1.0);
-  }
+  // The scenario sampler is WGD/LORe-aware (MultiModel::descend/backtraceU):
+  // the backbone is sampled at the FITTED q and r, with WGD ohnolog splits
+  // recorded as isWGD duplications. (Previously sampled at r=1 as a
+  // workaround for the U-unaware sampler; no longer needed.)
   for (unsigned int i = 0; i < localFamilies.size(); ++i) {
     std::vector<std::string> perSpeciesEventCountsFiles;
     std::vector<std::string> transferFiles;
@@ -705,6 +706,19 @@ void AleOptimizer::reconcile(unsigned int samples) {
     wos.close();
     Logger::timed << "[Reconciliation] WGD summary (branch, q, r, commits): "
                   << wgdSummaryFile << std::endl;
+  }
+  // synteny (Layer 1) emission parameters and data totals
+  if (_evaluator->hasSynteny()) {
+    unsigned int n1 = 0, n0 = 0, fams = 0;
+    _evaluator->getSyntenyTotals(n1, n0, fams);
+    auto synFile = FileSystem::joinPaths(recDir, "syntenySummary.txt");
+    ParallelOfstream sos(synFile, true);
+    sos << "#sigma_W\tsigma_N\tfamilies_with_pairs\tpairs_collinear\t"
+        << "pairs_noncollinear" << std::endl;
+    sos << _evaluator->getSigmaW() << "\t" << _evaluator->getSigmaN() << "\t"
+        << fams << "\t" << n1 << "\t" << n0 << std::endl;
+    sos.close();
+    Logger::timed << "Synteny summary written in " << synFile << std::endl;
   }
   // export highway information
   for (unsigned int hi = 0; hi < highways.size(); ++hi) {

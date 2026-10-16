@@ -105,4 +105,6 @@ struct AleState {
   // LORe: whether the resolution probability(ies) are being jointly
   // optimized with the WGD retentions (mirrors --lore / --lore-wgd)
   bool optimizeResolution;
+  // Synteny emission parameters {sigma_W, sigma_N} (empty = not set yet)
+  std::vector<double> syntenyParams;
 };

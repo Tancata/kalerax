@@ -81,7 +81,19 @@ public:
     sampleResolutionCommits(samples, commitCounts, tetraCounts, false);
   }
 
+protected:
+  using UEventSample = typename MultiModel<REAL>::UEventSample;
+  // scenario-sampler hooks (MultiModel::descend / backtraceU)
+  bool sampleWGDCoin(CID cid, corax_rnode_t *sp, unsigned int c) override;
+  bool sampleUEvent(CID cid, corax_rnode_t *sp, unsigned int c,
+                    UEventSample &ev) override {
+    return sampleUEventImpl(cid, sp, c, ev, false);
+  }
+
 private:
+  // one draw from the U recursion (shared by the scenario sampler and btU)
+  bool sampleUEventImpl(CID cid, corax_rnode_t *sp, unsigned int c,
+                        UEventSample &ev, bool check);
   // U-aware backtrace helpers for the resolution-branch marginal. They reuse
   // computeProbability() to sample the resolved (R-state) events, and add the
   // unresolved (U-state) recursion and the WGD R/U coin on top.
@@ -131,8 +143,12 @@ private:
   // already hold R for this clade (set just before this is called in updateCLV).
   REAL dupBracket(unsigned int cid, unsigned int ec) {
     REAL split = REAL();
-    for (const auto &cs : this->_ccp.getCladeSplits(cid)) {
-      REAL t = _dlclvs[cs.left][ec] * _dlclvs[cs.right][ec] * cs.frequency;
+    const auto &splits = this->_ccp.getCladeSplits(cid);
+    for (size_t k = 0; k < splits.size(); ++k) {
+      const auto &cs = splits[k];
+      // WGD split: synteny-weighted frequency (== ccp frequency without synteny)
+      REAL t = _dlclvs[cs.left][ec] * _dlclvs[cs.right][ec] *
+               this->synWgdFreq(cid, k, cs.frequency);
       scale(t);
       split += t;
     }
@@ -141,6 +157,11 @@ private:
     return out;
   }
 
+  // Normaliser of the unresolved (U) event probabilities. A tetrasomic U
+  // lineage has no duplication channel, so its per-branch events (speciation,
+  // loss) are renormalised over PS + PL to sum to 1; without this the U
+  // process is defective (mass (1-r)*PD lost per branch) and r is biased to 1.
+  double uDen(unsigned int ec) const { return _PS[ec] + _PL[ec]; }
   // functions to work with CLVs
   virtual void allocateMemory();
   virtual void deallocateMemory();
@@ -272,12 +293,12 @@ template <class REAL> void UndatedDLMultiModel<REAL>::updateCLV(CID cid) {
           for (const auto &cs : this->_ccp.getCladeSplits(cid)) {
             REAL t = (_uclvs[cs.left][fc] * _uclvs[cs.right][gc] +
                       _uclvs[cs.right][fc] * _uclvs[cs.left][gc]) *
-                     (_PS[ec] * cs.frequency);
+                     (_PS[ec] / uDen(ec) * cs.frequency);
             scale(t);
             rest += t;
           }
           // speciation + unresolved loss of one daughter (SL acting on U)
-          REAL sl = (uu[fc] * _uEU[gc] + uu[gc] * _uEU[fc]) * _PS[ec];
+          REAL sl = (uu[fc] * _uEU[gc] + uu[gc] * _uEU[fc]) * (_PS[ec] / uDen(ec));
           scale(sl);
           rest += sl;
         } else {
@@ -433,10 +454,10 @@ void UndatedDLMultiModel<REAL>::recomputeSpeciesProbabilities() {
               auto g = this->getSpeciesRight(speciesNode)->node_index;
               auto fc = f * _gammaCatNumber + c;
               auto gc = g * _gammaCatNumber + c;
-              REAL lossU = REAL(_PL[ec]); // lost while still unresolved
+              REAL lossU = REAL(_PL[ec] / uDen(ec)); // lost while still unresolved
               scale(lossU);
               rest += lossU;
-              REAL specU = _uEU[fc] * _uEU[gc] * _PS[ec]; // speciate, both U
+              REAL specU = _uEU[fc] * _uEU[gc] * (_PS[ec] / uDen(ec)); // speciate, both U
               scale(specU);
               rest += specU;
             } else {
@@ -712,6 +733,26 @@ void UndatedDLMultiModel<REAL>::sampleResolutionCommits(
   }
 }
 
+// WGD R-vs-U coin at the top of branch sp, with the exact weights of the
+// parent's consumed value R_top = (1-q) R + q U. Returns true => enter U.
+template <class REAL>
+bool UndatedDLMultiModel<REAL>::sampleWGDCoin(CID cid, corax_rnode_t *sp,
+                                              unsigned int c) {
+  auto e = sp->node_index;
+  if (!_hasWGD[e]) {
+    return false;
+  }
+  auto ec = e * _gammaCatNumber + c;
+  double q = _q[e];
+  REAL wR = _dlclvs[cid][ec] * (1.0 - q);
+  REAL wU = _uclvs[cid][ec] * q;
+  scale(wR);
+  scale(wU);
+  REAL total = wR + wU;
+  REAL toSample = this->getRandom(total);
+  return !(wR > toSample);
+}
+
 // Descend into a child species node; sample the WGD R-vs-U coin if it is the
 // WGD branch (STEP 2), otherwise continue resolved.
 template <class REAL>
@@ -720,28 +761,22 @@ void UndatedDLMultiModel<REAL>::btDescend(CID cid, corax_rnode_t *sp,
                                           std::vector<unsigned int> &commits,
                                           bool check) {
   auto e = sp->node_index;
-  if (!_hasWGD[e]) {
-    btR(cid, sp, c, commits, check);
-    return;
+  if (check && _hasWGD[e]) {
+    auto ec = e * _gammaCatNumber + c;
+    REAL wR = _dlclvs[cid][ec] * (1.0 - _q[e]);
+    REAL wU = _uclvs[cid][ec] * _q[e];
+    scale(wR);
+    scale(wU);
+    if (!loreInsideClose(REAL(wR + wU), _dlclvsTop[cid][ec])) {
+      std::cerr << "LORe STEP5.2 FAIL: WGD coin weights != _dlclvsTop at cid="
+                << cid << " e=" << e << std::endl;
+      std::abort();
+    }
   }
-  auto ec = e * _gammaCatNumber + c;
-  double q = _q[e];
-  REAL wR = _dlclvs[cid][ec] * (1.0 - q); // stay R
-  REAL wU = _uclvs[cid][ec] * q;          // become U
-  scale(wR);
-  scale(wU);
-  REAL total = wR + wU;
-  if (check && !loreInsideClose(total, _dlclvsTop[cid][ec])) {
-    // STEP 5.2: wR + wU must equal _dlclvsTop[cid][ec] (parent's consumed value)
-    std::cerr << "LORe STEP5.2 FAIL: WGD coin weights != _dlclvsTop at cid="
-              << cid << " e=" << e << std::endl;
-    std::abort();
-  }
-  REAL toSample = this->getRandom(total);
-  if (wR > toSample) {
-    btR(cid, sp, c, commits, check);
-  } else {
+  if (sampleWGDCoin(cid, sp, c)) {
     btU(cid, sp, c, commits, check);
+  } else {
+    btR(cid, sp, c, commits, check);
   }
 }
 
@@ -786,113 +821,163 @@ void UndatedDLMultiModel<REAL>::btR(CID cid, corax_rnode_t *sp, unsigned int c,
   }
 }
 
-// Unresolved-state backtrace (STEP 3). Samples one term of the U recursion
-// proportionally; emits a U->R commit (records branch e) when resolution fires.
+// One draw from the unresolved (U) recursion at (cid, sp). Every weight is the
+// exact inside term of updateCLV (normalised U events, synteny rho on the
+// WGD split), so the sampled scenario/resolution marginals are exact.
 template <class REAL>
-void UndatedDLMultiModel<REAL>::btU(CID cid, corax_rnode_t *sp, unsigned int c,
-                                    std::vector<unsigned int> &commits,
-                                    bool check) {
+bool UndatedDLMultiModel<REAL>::sampleUEventImpl(CID cid, corax_rnode_t *sp,
+                                                 unsigned int c,
+                                                 UEventSample &ev,
+                                                 bool check) {
   auto e = sp->node_index;
   auto ec = e * _gammaCatNumber + c;
   double r = _resolutionProbs[e];
   bool isLeaf = !this->getSpeciesLeft(sp);
-  unsigned int f = 0, g = 0, fc = 0, gc = 0;
+  unsigned int fc = 0, gc = 0;
   if (!isLeaf) {
-    f = this->getSpeciesLeft(sp)->node_index;
-    g = this->getSpeciesRight(sp)->node_index;
-    fc = f * _gammaCatNumber + c;
-    gc = g * _gammaCatNumber + c;
+    fc = this->getSpeciesLeft(sp)->node_index * _gammaCatNumber + c;
+    gc = this->getSpeciesRight(sp)->node_index * _gammaCatNumber + c;
   }
-
-  // weight of each U term (mirrors the inside U recursion exactly)
+  const auto &splits = this->_ccp.getCladeSplits(cid);
+  const double psU = _PS[ec] / uDen(ec);
   REAL wResolve = dupBracket(cid, ec);
   wResolve *= r;
   scale(wResolve);
   REAL total = wResolve;
-  REAL wLeaf = REAL();
   if (isLeaf) {
-    wLeaf = _dlclvs[cid][ec] * (1.0 - r); // (1-r) R
+    REAL wLeaf = _dlclvs[cid][ec] * (1.0 - r);
     scale(wLeaf);
     total = total + wLeaf;
   } else {
-    for (const auto &cs : this->_ccp.getCladeSplits(cid)) {
-      double w0 = (1.0 - r) * _PS[ec] * cs.frequency;
+    for (const auto &cs : splits) {
+      double w0 = (1.0 - r) * psU * cs.frequency;
       REAL s1 = _uclvs[cs.left][fc] * _uclvs[cs.right][gc] * w0;
       REAL s2 = _uclvs[cs.right][fc] * _uclvs[cs.left][gc] * w0;
       scale(s1);
       scale(s2);
       total = total + s1 + s2;
     }
-    double w1 = (1.0 - r) * _PS[ec];
-    REAL sl1 = _uclvs[cid][fc] * _uEU[gc] * w1; // keep f, lose g (unresolved)
-    REAL sl2 = _uclvs[cid][gc] * _uEU[fc] * w1; // keep g, lose f (unresolved)
+    double w1 = (1.0 - r) * psU;
+    REAL sl1 = _uclvs[cid][fc] * _uEU[gc] * w1;
+    REAL sl2 = _uclvs[cid][gc] * _uEU[fc] * w1;
     scale(sl1);
     scale(sl2);
     total = total + sl1 + sl2;
   }
   if (check && !loreInsideClose(total, _uclvs[cid][ec])) {
-    // STEP 5.2: the U-cell sampled-term weights must sum to the inside U CLV.
     std::cerr << "LORe STEP5.2 FAIL: U-cell weights != _uclvs at cid=" << cid
               << " e=" << e << std::endl;
     std::abort();
   }
-
-  // sample one term proportionally
+  if (!(total > REAL())) {
+    return false;
+  }
   REAL toSample = this->getRandom(total);
   REAL acc = wResolve;
   if (wResolve > toSample) {
-    // RESOLVE at branch e: the U->R commit (ohnolog divergence). Record it.
-    commits.push_back(e);
-    // sub-sample within dupBracket = 2*E*R + sum_splits ccp*R*R
+    // resolve on branch e: sub-sample within 2*E*R + sum_k rho_k ccp_k R_l R_r
     REAL dTotal = dupBracket(cid, ec);
     REAL dSample = this->getRandom(dTotal);
     REAL dAcc = REAL();
-    for (const auto &cs : this->_ccp.getCladeSplits(cid)) {
-      REAL t = _dlclvs[cs.left][ec] * _dlclvs[cs.right][ec] * cs.frequency;
+    for (size_t k = 0; k < splits.size(); ++k) {
+      const auto &cs = splits[k];
+      REAL t = _dlclvs[cs.left][ec] * _dlclvs[cs.right][ec] *
+               this->synWgdFreq(cid, k, cs.frequency);
       scale(t);
       dAcc = dAcc + t;
       if (dAcc > dSample) {
-        // both ohnolog copies survive and are now resolved
-        btR(cs.left, sp, c, commits, check);
-        btR(cs.right, sp, c, commits, check);
-        return;
+        ev.type = UEventSample::RESOLVE_SPLIT;
+        ev.left = cs.left;
+        ev.right = cs.right;
+        ev.blLeft = cs.blLeft;
+        ev.blRight = cs.blRight;
+        return true;
       }
     }
-    // remainder: 2*E*R -> one copy survives (resolved), the other is lost
-    btR(cid, sp, c, commits, check);
-    return;
+    ev.type = UEventSample::RESOLVE_SINGLE; // 2*E*R: one copy lost
+    return true;
   }
   if (isLeaf) {
-    _tetra.push_back(sp->node_index); // U lineage survives to an extant tip unresolved
-    return; // (1-r) R term: unresolved locus observed as a single gene
+    ev.type = UEventSample::LEAF;
+    return true;
   }
-  // internal: speciate-U (both orderings per split), then SL-U
-  for (const auto &cs : this->_ccp.getCladeSplits(cid)) {
-    double w0 = (1.0 - r) * _PS[ec] * cs.frequency;
+  for (const auto &cs : splits) {
+    double w0 = (1.0 - r) * psU * cs.frequency;
     REAL s1 = _uclvs[cs.left][fc] * _uclvs[cs.right][gc] * w0;
     scale(s1);
     acc = acc + s1;
     if (acc > toSample) {
-      btU(cs.left, this->getSpeciesLeft(sp), c, commits, check);
-      btU(cs.right, this->getSpeciesRight(sp), c, commits, check);
-      return;
+      ev.type = UEventSample::SPECIATE;
+      ev.left = cs.left;
+      ev.right = cs.right;
+      ev.blLeft = cs.blLeft;
+      ev.blRight = cs.blRight;
+      ev.leftToLeftSpecies = true;
+      return true;
     }
     REAL s2 = _uclvs[cs.right][fc] * _uclvs[cs.left][gc] * w0;
     scale(s2);
     acc = acc + s2;
     if (acc > toSample) {
-      btU(cs.right, this->getSpeciesLeft(sp), c, commits, check);
-      btU(cs.left, this->getSpeciesRight(sp), c, commits, check);
-      return;
+      ev.type = UEventSample::SPECIATE;
+      ev.left = cs.left;
+      ev.right = cs.right;
+      ev.blLeft = cs.blLeft;
+      ev.blRight = cs.blRight;
+      ev.leftToLeftSpecies = false;
+      return true;
     }
   }
-  double w1 = (1.0 - r) * _PS[ec];
+  double w1 = (1.0 - r) * psU;
   REAL sl1 = _uclvs[cid][fc] * _uEU[gc] * w1;
   scale(sl1);
   acc = acc + sl1;
+  ev.type = UEventSample::SPECIATE_LOSS;
   if (acc > toSample) {
-    btU(cid, this->getSpeciesLeft(sp), c, commits, check); // keep f, lose g
+    ev.dest = this->getSpeciesLeft(sp); // keep f, lose g
+    ev.lost = this->getSpeciesRight(sp);
+  } else {
+    ev.dest = this->getSpeciesRight(sp); // keep g, lose f
+    ev.lost = this->getSpeciesLeft(sp);
+  }
+  return true;
+}
+
+// Unresolved-state backtrace for the resolution profile: one U draw, recording
+// a U->R commit (species branch) when resolution fires.
+template <class REAL>
+void UndatedDLMultiModel<REAL>::btU(CID cid, corax_rnode_t *sp, unsigned int c,
+                                    std::vector<unsigned int> &commits,
+                                    bool check) {
+  UEventSample ev;
+  if (!sampleUEventImpl(cid, sp, c, ev, check)) {
     return;
   }
-  btU(cid, this->getSpeciesRight(sp), c, commits, check); // keep g, lose f
+  auto e = sp->node_index;
+  switch (ev.type) {
+  case UEventSample::RESOLVE_SPLIT:
+    commits.push_back(e);
+    btR(ev.left, sp, c, commits, check);
+    btR(ev.right, sp, c, commits, check);
+    return;
+  case UEventSample::RESOLVE_SINGLE:
+    commits.push_back(e);
+    btR(cid, sp, c, commits, check);
+    return;
+  case UEventSample::LEAF:
+    _tetra.push_back(e); // still tetrasomic at the tip
+    return;
+  case UEventSample::SPECIATE:
+    if (ev.leftToLeftSpecies) {
+      btU(ev.left, this->getSpeciesLeft(sp), c, commits, check);
+      btU(ev.right, this->getSpeciesRight(sp), c, commits, check);
+    } else {
+      btU(ev.right, this->getSpeciesLeft(sp), c, commits, check);
+      btU(ev.left, this->getSpeciesRight(sp), c, commits, check);
+    }
+    return;
+  case UEventSample::SPECIATE_LOSS:
+    btU(cid, ev.dest, c, commits, check);
+    return;
+  }
 }

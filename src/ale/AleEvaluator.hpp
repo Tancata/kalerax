@@ -11,6 +11,7 @@
 
 #include "AleModelParameters.hpp"
 #include "OptimizationClasses.hpp"
+#include "Synteny.hpp"
 
 class AleOptimizer;
 class SpeciesTree;
@@ -212,6 +213,20 @@ public:
    *  AleOptimizer::reconcile() and the highway candidate tests.
    */
   void setSummaryOnly(bool on) { _summaryOnly = on; }
+
+  // --- Synteny (Layer 1) ---
+  // Load <dir>/<family>.syn for every local family (missing file = no
+  // synteny for that family). `state` is the checkpointed {sigmaW, sigmaN};
+  // when it already holds fitted values (resumed run) they are used.
+  void loadSynteny(const std::string &dir, bool unlistedNA, double sigmaW0,
+                   double sigmaN0, bool fix, std::vector<double> &state);
+  bool hasSynteny() const { return _synLoaded; }
+  void setSyntenyParams(double sigmaW, double sigmaN);
+  double getSigmaW() const { return _sigmaW; }
+  double getSigmaN() const { return _sigmaN; }
+  // global (all ranks) observed pair totals: y=1, y=0, families with data
+  void getSyntenyTotals(unsigned int &n1, unsigned int &n0,
+                        unsigned int &families);
   bool isSummaryOnly() const { return _summaryOnly; }
 
   /**
@@ -340,6 +355,19 @@ private:
   // by buildWGDStructure(). _resolutionProb is the legacy scalar (r of the first
   // resolvable WGD).
   std::vector<double> _wgdResolution;
+  // current per-species-branch r vector broadcast to the evaluations (empty =
+  // never set); re-applied when an evaluation is rebuilt (resetEvaluation)
+  std::vector<double> _perBranchR;
+  // synteny (Layer 1) state; _synInputs[i] null = no data for family i
+  std::vector<std::shared_ptr<SyntenyInput>> _synInputs;
+  bool _synLoaded = false;
+  bool _fixSynteny = false;
+  double _sigmaW = 0.5;
+  double _sigmaN = 0.05;
+  std::vector<double> *_synState = nullptr;
+  double optimizeSynteny(bool thorough);
+  // re-apply WGD / LORe / synteny state to a freshly (re)built evaluation
+  void reapplyFamilyState(unsigned int i);
   std::vector<std::vector<unsigned int>> _wgdSubtreeBranches;
   std::vector<char> _wgdResolvable;
   // node indices of the WGDs whose r is fitted under --lore-wgd (empty => every

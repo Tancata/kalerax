@@ -695,6 +695,12 @@ void run(AleArguments &args) {
   // declare any command-line WGDs on the (now constructed) species tree, or
   // restore those already recovered from the checkpoint on a resumed run
   declareWGDs(args, speciesTreeOptimizer, checkpointDetected);
+  // synteny (Layer 1) pair observations, if requested
+  if (!args.syntenyDir.empty()) {
+    speciesTreeOptimizer.getEvaluator().loadSynteny(
+        args.syntenyDir, args.syntenyUnlistedNA, args.sigmaW0, args.sigmaN0,
+        args.fixSynteny, speciesTreeOptimizer.getSyntenyParams());
+  }
   if (!checkpointDetected) {
     initCheckpoint(args, families, ckpDir);
     speciesTreeOptimizer.setCurrentStep(AleStep::SpeciesTreeOpt);

@@ -1,0 +1,178 @@
+diff -ruN a/src/IO/ReconciliationWriter.cpp b/src/IO/ReconciliationWriter.cpp
+--- a/src/IO/ReconciliationWriter.cpp	2026-10-16 14:54:21
++++ b/src/IO/ReconciliationWriter.cpp	2026-10-16 14:54:21
+@@ -17,6 +17,9 @@
+   os << "[&&NHX";
+   os << ":S=" << species->label;
+   os << ":D=" << ((event.type == ReconciliationEventType::EVENT_D) ? "Y" : "N");
++  if (event.type == ReconciliationEventType::EVENT_D && event.isWGD) {
++    os << ":WGD=Y"; // kalerax: ohnolog split of a declared WGD
++  }
+   os << ":H="
+      << ((event.type == ReconciliationEventType::EVENT_T ||
+           event.type == ReconciliationEventType::EVENT_TL)
+@@ -342,7 +345,11 @@
+   if (!node->next) {
+     os << (node->label ? node->label : "null");
+   } else {
+-    os << Enums::getEventName(geneToEvents[node->node_index].back().type);
++    const auto &ev = geneToEvents[node->node_index].back();
++    // kalerax: label WGD ohnolog splits "W" (SSDs stay "D")
++    os << ((ev.type == ReconciliationEventType::EVENT_D && ev.isWGD)
++               ? std::string("W")
++               : std::string(Enums::getEventName(ev.type)));
+   }
+   // divide the root BL by two to place the root
+   // at the middle of this branch
+diff -ruN a/src/ccp/ConditionalClades.hpp b/src/ccp/ConditionalClades.hpp
+--- a/src/ccp/ConditionalClades.hpp	2026-10-16 14:54:21
++++ b/src/ccp/ConditionalClades.hpp	2026-10-16 14:54:21
+@@ -81,6 +81,8 @@
+   const CladeSplits &getCladeSplits(CID cid) const {
+     return _allCladeSplits[cid];
+   }
++  // kalerax (synteny emission): split frequencies are reweighted in place
++  CladeSplits &getCladeSplitsMutable(CID cid) { return _allCladeSplits[cid]; }
+   bool skip() const { return false; }
+   // bool skip() const {return  _uniqueInputTrees == _inputTrees;}
+ 
+diff -ruN a/src/util/Scenario.cpp b/src/util/Scenario.cpp
+--- a/src/util/Scenario.cpp	2026-10-16 14:54:21
++++ b/src/util/Scenario.cpp	2026-10-16 14:54:21
+@@ -13,6 +13,7 @@
+                                       "TL", "L",  "Leaf", "Invalid"};
+ 
+ const unsigned int Scenario::EVENT_TYPE_NUMBER = 9;
++const unsigned int Scenario::COUNT_COLUMNS = 10;
+ 
+ struct TransferPair {
+   double count;
+@@ -131,19 +132,20 @@
+                             const std::vector<double> &eventCounts,
+                             const std::vector<std::string> &indexToLabel) {
+   os << "species_label, speciations, duplications, losses, transfers, "
+-        "presence, origination, copies, singletons, transfers_to"
++        "presence, origination, copies, singletons, transfers_to, "
++        "wgd_duplications"
+      << std::endl;
+   auto N = indexToLabel.size();
+-  assert(Scenario::EVENT_TYPE_NUMBER * N == eventCounts.size());
++  assert(Scenario::COUNT_COLUMNS * N == eventCounts.size());
+   for (unsigned int i = 0; i < N; ++i) {
+     bool print = false;
+-    for (unsigned int e = 0; e < Scenario::EVENT_TYPE_NUMBER; ++e) {
+-      print |= (eventCounts[i * Scenario::EVENT_TYPE_NUMBER + e] > 0.0);
++    for (unsigned int e = 0; e < Scenario::COUNT_COLUMNS; ++e) {
++      print |= (eventCounts[i * Scenario::COUNT_COLUMNS + e] > 0.0);
+     }
+     if (print) {
+       os << indexToLabel[i];
+-      for (unsigned int e = 0; e < Scenario::EVENT_TYPE_NUMBER; ++e) {
+-        os << ", " << eventCounts[i * Scenario::EVENT_TYPE_NUMBER + e];
++      for (unsigned int e = 0; e < Scenario::COUNT_COLUMNS; ++e) {
++        os << ", " << eventCounts[i * Scenario::COUNT_COLUMNS + e];
+       }
+       os << "\n";
+     }
+@@ -155,15 +157,16 @@
+     const std::unordered_map<std::string, std::vector<double>>
+         &speciesToEventCount) {
+   os << "species_label, speciations, duplications, losses, transfers, "
+-        "presence, origination, copies, singletons, transfers_to"
++        "presence, origination, copies, singletons, transfers_to, "
++        "wgd_duplications"
+      << std::endl;
+-  std::vector<double> defaultCount(Scenario::EVENT_TYPE_NUMBER, 0.0);
++  std::vector<double> defaultCount(Scenario::COUNT_COLUMNS, 0.0);
+   for (auto &it : speciesToEventCount) {
+     if (defaultCount == it.second) {
+       // do not write species without any event
+       continue;
+     }
+-    assert(it.second.size() == Scenario::EVENT_TYPE_NUMBER);
++    assert(it.second.size() == Scenario::COUNT_COLUMNS);
+     os << it.first;
+     for (auto v : it.second) {
+       os << ", " << v;
+@@ -177,7 +180,7 @@
+ 
+   ParallelOfstream os(filename, masterRankOnly);
+   std::unordered_map<std::string, std::vector<double>> speciesToEventCount;
+-  std::vector<double> defaultCount(EVENT_TYPE_NUMBER, 0);
++  std::vector<double> defaultCount(COUNT_COLUMNS, 0);
+   for (unsigned int e = 0;
+        e < _speciesTree->tip_count + _speciesTree->inner_count; ++e) {
+     assert(_speciesTree->nodes[e]->label);
+@@ -197,6 +200,7 @@
+   // 6: gene copies
+   // 7: singletons
+   // 8: transfer to
++  // 9: WGD duplications (ohnolog splits; excluded from column 1)
+   for (auto &event : _events) {
+     auto &eventCount =
+         speciesToEventCount[_speciesTree->nodes[event.speciesNode]->label];
+@@ -219,7 +223,11 @@
+       speciesToEventCount[event.pllLostSpeciesNode->label][2]++;
+       break;
+     case ReconciliationEventType::EVENT_D:
+-      eventCount[1]++;
++      if (event.isWGD) {
++        eventCount[9]++;
++      } else {
++        eventCount[1]++;
++      }
+       break;
+     case ReconciliationEventType::EVENT_DL:
+       eventCount[1]++;
+@@ -312,7 +320,7 @@
+   auto speciesLabelToIndex = speciesTree.getDeterministicLabelToId();
+   auto speciesIndexToLabel = speciesTree.getDeterministicIdToLabel();
+   auto N = speciesLabelToIndex.size();
+-  std::vector<double> eventCounts(EVENT_TYPE_NUMBER * N, 0.0);
++  std::vector<double> eventCounts(COUNT_COLUMNS * N, 0.0);
+   for (const auto &subfile : filenames) {
+     std::ifstream is(subfile);
+     std::string line;
+@@ -326,8 +334,8 @@
+       iss >> species;
+       species.pop_back(); // remove comma
+       auto speciesIndex = speciesLabelToIndex[species];
+-      auto begin = speciesIndex * EVENT_TYPE_NUMBER;
+-      for (unsigned int i = begin; i < begin + EVENT_TYPE_NUMBER; ++i) {
++      auto begin = speciesIndex * COUNT_COLUMNS;
++      for (unsigned int i = begin; i < begin + COUNT_COLUMNS; ++i) {
+         double temp;
+         iss >> temp;
+         std::string comma;
+diff -ruN a/src/util/Scenario.hpp b/src/util/Scenario.hpp
+--- a/src/util/Scenario.hpp	2026-10-16 14:54:21
++++ b/src/util/Scenario.hpp	2026-10-16 14:54:21
+@@ -62,7 +62,7 @@
+           destSpeciesNode(INVALID_NODE_ID), lostSpeciesNode(INVALID_NODE_ID),
+           leftGeneIndex(INVALID_NODE_ID), rightGeneIndex(INVALID_NODE_ID),
+           pllTransferedGeneNode(nullptr), pllDestSpeciesNode(nullptr),
+-          pllLostSpeciesNode(nullptr) {}
++          pllLostSpeciesNode(nullptr), isWGD(false) {}
+     ReconciliationEventType type;
+     ReconciliationEventType previousType;
+     unsigned int geneNode;
+@@ -84,6 +84,10 @@
+     corax_rnode_t *pllDestSpeciesNode;
+     corax_rnode_t *pllLostSpeciesNode;
+ 
++    // kalerax: an EVENT_D that is a whole-genome-duplication split (the
++    // ohnolog divergence, AORe or LORe), counted separately from SSDs.
++    bool isWGD;
++
+     std::string label;
+ 
+     /**
+@@ -202,6 +206,8 @@
+   }
+   corax_rnode_t *getOriginationSpecies() const;
+   static const unsigned int EVENT_TYPE_NUMBER;
++  // number of columns of the per-species event count files
++  static const unsigned int COUNT_COLUMNS;
+ 
+   void setLastEventType(ReconciliationEventType type) { _lastEventType = type; }
+   ReconciliationEventType getLastEventType() const { return _lastEventType; }

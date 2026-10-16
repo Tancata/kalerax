@@ -4,6 +4,9 @@
 #include <algorithm>
 #include <cassert>
 #include <fstream>
+#include <sstream>
+#include <cmath>
+#include <IO/FileSystem.hpp>
 
 #include <IO/Logger.hpp>
 #include <optimizers/DTLOptimizer.hpp>
@@ -129,6 +132,9 @@ void AleEvaluator::resetEvaluation(unsigned int i, bool highPrecision) {
   _evaluations[i] =
       createModel(_speciesTree, _families[famIndex], _info, _mixtureAlpha,
                   _modelParameters[i], _transferHighways, highPrecision);
+  // A rebuilt evaluation (precision switch) must carry the current WGD q,
+  // per-branch LORe r and synteny state; createModel() knows none of them.
+  reapplyFamilyState(i);
   auto ll = _evaluations[i]->computeLogLikelihood();
   if (highPrecision) {
     _highPrecisions[i] = 1;
@@ -138,6 +144,207 @@ void AleEvaluator::resetEvaluation(unsigned int i, bool highPrecision) {
       resetEvaluation(i, true);
     }
   }
+}
+
+void AleEvaluator::reapplyFamilyState(unsigned int i) {
+  auto &ev = _evaluations[i];
+  for (unsigned int j = 0; j < _wgdNodes.size() && j < _wgdQ.size(); ++j) {
+    ev->setWGD(_wgdNodes[j], _wgdQ[j]);
+  }
+  if (!_perBranchR.empty()) {
+    ev->setResolutionProbVector(_perBranchR);
+  }
+  if (i < _synInputs.size() && _synInputs[i]) {
+    ev->setSynteny(*_synInputs[i]);
+    ev->setSyntenyParams(_sigmaW, _sigmaN);
+  }
+}
+
+
+// Robust 1-D maximisation on [lo, hi]: coarse grid (log-spaced when lo > 0
+// and the range spans > 1 decade), then golden-section between the best
+// grid point's neighbours. Leaves the model at the best value ever evaluated
+// (including `start`), so it never returns something worse than it started.
+static double robustMax1D(const std::function<double(double)> &eval, double lo,
+                          double hi, double start, int gridN, int iters) {
+  double bestX = start, bestF = eval(start);
+  std::vector<double> xs(gridN);
+  const bool logScale = (lo > 0.0) && (hi / lo > 10.0);
+  for (int i = 0; i < gridN; ++i) {
+    double t = (gridN == 1) ? 0.5 : double(i) / double(gridN - 1);
+    xs[i] = logScale ? std::exp(std::log(lo) + t * (std::log(hi) - std::log(lo)))
+                     : lo + t * (hi - lo);
+  }
+  int bi = -1;
+  for (int i = 0; i < gridN; ++i) {
+    double f = eval(xs[i]);
+    if (f > bestF) {
+      bestF = f;
+      bestX = xs[i];
+      bi = i;
+    }
+  }
+  double a = (bi > 0) ? xs[bi - 1] : (bi == 0 ? lo : std::max(lo, bestX * 0.5));
+  double b = (bi >= 0 && bi < gridN - 1) ? xs[bi + 1]
+                                          : (bi == gridN - 1 ? hi : std::min(hi, bestX * 1.5 + 1e-9));
+  const double gr = 0.6180339887498949;
+  double c = b - gr * (b - a), d = a + gr * (b - a);
+  double fc = eval(c), fd = eval(d);
+  for (int it = 0; it < iters; ++it) {
+    if (fc > fd) {
+      b = d; d = c; fd = fc; c = b - gr * (b - a); fc = eval(c);
+    } else {
+      a = c; c = d; fc = fd; d = a + gr * (b - a); fd = eval(d);
+    }
+  }
+  if (fc > bestF) { bestF = fc; bestX = c; }
+  if (fd > bestF) { bestF = fd; bestX = d; }
+  eval(bestX);
+  return bestX;
+}
+
+void AleEvaluator::loadSynteny(const std::string &dir, bool unlistedNA,
+                               double sigmaW0, double sigmaN0, bool fix,
+                               std::vector<double> &state) {
+  _synState = &state;
+  _fixSynteny = fix;
+  if (state.size() == 2) { // resumed: fitted values from the checkpoint
+    _sigmaW = state[0];
+    _sigmaN = state[1];
+  } else {
+    _sigmaW = sigmaW0;
+    _sigmaN = sigmaN0;
+  }
+  if (!(_sigmaW > 0.0 && _sigmaW < 1.0 && _sigmaN > 0.0 && _sigmaN < 1.0)) {
+    Logger::error << "Error: synteny parameters must lie in (0,1): sigmaW="
+                  << _sigmaW << " sigmaN=" << _sigmaN << std::endl;
+    ParallelContext::abort(1);
+  }
+  _synInputs.assign(getLocalFamilyNumber(), nullptr);
+  unsigned int filesRead = 0, badLines = 0;
+  for (unsigned int i = 0; i < getLocalFamilyNumber(); ++i) {
+    auto path =
+        FileSystem::joinPaths(dir, _geneTrees.getTrees()[i].name + ".syn");
+    std::ifstream is(path);
+    if (!is.good()) {
+      continue;
+    }
+    auto in = std::make_shared<SyntenyInput>();
+    in->unlistedNA = unlistedNA;
+    std::string line;
+    while (std::getline(is, line)) {
+      if (line.empty() || line[0] == '#') {
+        continue;
+      }
+      std::istringstream iss(line);
+      std::string a, b, c;
+      iss >> a >> b >> c;
+      if (a.empty() || b.empty()) {
+        continue;
+      }
+      if (c.empty()) { // "gene NA": all pairs of this gene undetermined
+        if (b == "NA" || b == "na") {
+          in->naGenes.insert(a);
+        } else {
+          badLines++;
+        }
+        continue;
+      }
+      auto key = syntenyKey(a, b);
+      if (c == "1") {
+        in->pairObs[key] = 1;
+      } else if (c == "0") {
+        in->pairObs[key] = 0;
+      } else if (c == "NA" || c == "na") {
+        in->naPairs.insert(key);
+      } else {
+        badLines++;
+      }
+    }
+    _synInputs[i] = in;
+    filesRead++;
+    _evaluations[i]->setSynteny(*in);
+    _evaluations[i]->setSyntenyParams(_sigmaW, _sigmaN);
+  }
+  ParallelContext::sumUInt(filesRead);
+  ParallelContext::sumUInt(badLines);
+  _synLoaded = (filesRead > 0);
+  unsigned int n1 = 0, n0 = 0, fams = 0;
+  getSyntenyTotals(n1, n0, fams);
+  Logger::timed << "[Synteny] read " << filesRead << " .syn files from " << dir
+                << "; families with observed pairs: " << fams
+                << "; collinear pairs (y=1): " << n1
+                << "; non-collinear (y=0): " << n0
+                << "; sigmaW=" << _sigmaW << " sigmaN=" << _sigmaN
+                << (fix ? " (fixed)" : "") << std::endl;
+  if (badLines) {
+    Logger::info << "[Synteny] warning: " << badLines
+                 << " unparsable line(s) ignored" << std::endl;
+  }
+  if (_synState) {
+    *_synState = {_sigmaW, _sigmaN};
+  }
+}
+
+void AleEvaluator::setSyntenyParams(double sigmaW, double sigmaN) {
+  _sigmaW = sigmaW;
+  _sigmaN = sigmaN;
+  for (unsigned int i = 0; i < _evaluations.size(); ++i) {
+    if (i < _synInputs.size() && _synInputs[i]) {
+      _evaluations[i]->setSyntenyParams(sigmaW, sigmaN);
+    }
+  }
+  if (_synState) {
+    *_synState = {_sigmaW, _sigmaN};
+  }
+}
+
+void AleEvaluator::getSyntenyTotals(unsigned int &n1, unsigned int &n0,
+                                    unsigned int &families) {
+  n1 = n0 = families = 0;
+  for (unsigned int i = 0; i < _evaluations.size(); ++i) {
+    if (i < _synInputs.size() && _synInputs[i] &&
+        _evaluations[i]->hasSynteny()) {
+      unsigned int a = 0, b = 0;
+      _evaluations[i]->getSyntenyTotals(a, b);
+      n1 += a;
+      n0 += b;
+      families++;
+    }
+  }
+  ParallelContext::sumUInt(n1);
+  ParallelContext::sumUInt(n0);
+  ParallelContext::sumUInt(families);
+}
+
+double AleEvaluator::optimizeSynteny(bool thorough) {
+  const double lo = 1e-4, hi = 1.0 - 1e-4;
+  const int grid = thorough ? 12 : 8, iters = thorough ? 24 : 14;
+  // sigma_N: every family with observations (null and WGD models alike)
+  robustMax1D(
+      [&](double x) { setSyntenyParams(_sigmaW, x); return computeLikelihood(); },
+      lo, hi, _sigmaN, grid, iters);
+  // sigma_W: only identifiable when a WGD is declared
+  if (!_wgdNodes.empty()) {
+    robustMax1D(
+        [&](double x) { setSyntenyParams(x, _sigmaN); return computeLikelihood(); },
+        lo, hi, _sigmaW, grid, iters);
+    // q and sigma_W trade off: re-refine each retention once
+    for (unsigned int j = 0; j < _wgdNodes.size(); ++j) {
+      auto node = _wgdNodes[j];
+      robustMax1D(
+          [&](double q) { setWGD(node, q); return computeLikelihood(); }, 0.0,
+          0.999, _wgdQ[j], thorough ? 10 : 6, iters);
+    }
+  }
+  auto ll = computeLikelihood();
+  Logger::timed << "[Synteny]   After synteny opt, ll=" << ll
+                << " sigmaW=" << _sigmaW << " sigmaN=" << _sigmaN;
+  for (unsigned int j = 0; j < _wgdNodes.size(); ++j) {
+    Logger::info << " q[node " << _wgdNodes[j] << "]=" << _wgdQ[j];
+  }
+  Logger::info << std::endl;
+  return ll;
 }
 
 void AleEvaluator::resetAllPrecisions() {
@@ -268,6 +475,7 @@ void AleEvaluator::setResolutionProb(double r) {
   // keep the per-event r state consistent on the AORe baseline / revert paths
   std::fill(_wgdResolution.begin(), _wgdResolution.end(), r);
   std::fill(_wgdResolutionsState.begin(), _wgdResolutionsState.end(), r);
+  _perBranchR.assign(_speciesTree.getTree().getNodeNumber(), r);
   for (auto &evaluation : _evaluations) {
     evaluation->setResolutionProb(r);
   }
@@ -360,6 +568,7 @@ void AleEvaluator::setWGDResolutions(const std::vector<double> &rPerWGD) {
       perBranch[e] = rPerWGD[j];
     }
   }
+  _perBranchR = perBranch;
   for (auto &evaluation : _evaluations) {
     evaluation->setResolutionProbVector(perBranch);
   }
@@ -608,6 +817,14 @@ double AleEvaluator::optimizeModelRates(bool thorough) {
     auto goldenRefine = [](const std::function<double(double)> &eval, double lo,
                            double hi, int iters) -> double {
       const double gr = 0.6180339887498949;
+      // Track the best point ever evaluated, including both endpoints: the
+      // optimum is often ON the boundary (q = 0: no WGD; r = 0), which the
+      // interior golden-section points never reach exactly.
+      double bestX = lo, bestF = eval(lo);
+      {
+        double fh = eval(hi);
+        if (fh > bestF) { bestF = fh; bestX = hi; }
+      }
       double a = lo, b = hi;
       double c = b - gr * (b - a), d = a + gr * (b - a);
       double fc = eval(c), fd = eval(d);
@@ -618,9 +835,10 @@ double AleEvaluator::optimizeModelRates(bool thorough) {
           a = c; c = d; fc = fd; d = a + gr * (b - a); fd = eval(d);
         }
       }
-      double xb = (fc > fd) ? c : d;
-      eval(xb); // leave the model at the best value
-      return xb;
+      if (fc > bestF) { bestF = fc; bestX = c; }
+      if (fd > bestF) { bestF = fd; bestX = d; }
+      eval(bestX); // leave the model at the best value
+      return bestX;
     };
 
     // (1) AORe optimum: WGD retentions only, with r = 1 (the nested null).
@@ -728,6 +946,10 @@ double AleEvaluator::optimizeModelRates(bool thorough) {
         Logger::info << std::endl;
       }
     }
+  }
+  // synteny emission parameters (Layer 1)
+  if (_synLoaded && !_fixSynteny) {
+    optimizeSynteny(thorough);
   }
   ll = optimizeGammaRates();
   resetAllPrecisions();

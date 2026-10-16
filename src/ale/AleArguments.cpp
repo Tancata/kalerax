@@ -63,7 +63,8 @@ AleArguments::AleArguments(int iargc, char **iargv)
       trimFamilyRatio(DEFAULT_TRIM_FAMILY_RATIO),
       maxCladeSplitRatio(DEFAULT_MAX_SPLIT_RATIO),
       sampleFrequency(DEFAULT_SAMPLE_FREQUENCY), output("alerax_output"),
-      geneTreeSamples(100), cleanupCCP(false), summaryOnly(false), seed(123),
+      geneTreeSamples(100), cleanupCCP(false), summaryOnly(false), sigmaW0(0.5), sigmaN0(0.05),
+      fixSynteny(false), syntenyUnlistedNA(false), seed(123),
       randomSpeciesRoot(false), optVerbose(false) {
   if (argc == 1) {
     printHelp();
@@ -115,6 +116,19 @@ AleArguments::AleArguments(int iargc, char **iargv)
       loreWgds.push_back(parseWGDDeclaration(std::string(argv[++i])));
     } else if (arg == "--summary-only") {
       summaryOnly = true;
+    } else if (arg == "--synteny-dir") {
+      syntenyDir = std::string(argv[++i]);
+    } else if (arg == "--synteny-params") {
+      std::string v(argv[++i]);
+      auto comma = v.find(',');
+      sigmaW0 = atof(v.substr(0, comma).c_str());
+      if (comma != std::string::npos) {
+        sigmaN0 = atof(v.substr(comma + 1).c_str());
+      }
+    } else if (arg == "--fix-synteny") {
+      fixSynteny = true;
+    } else if (arg == "--synteny-unlisted-na") {
+      syntenyUnlistedNA = true;
     } else if (arg == "--d") {
       d = atof(argv[++i]);
     } else if (arg == "--l") {
@@ -419,6 +433,17 @@ void AleArguments::printHelp() const {
                << "tests and CCP binaries; keep the summaries, global totals, "
                << "wgdSummary, species trees, model parameters and logs)"
                << std::endl;
+
+  Logger::info << "Synteny options (WGD/LORe, Layer 1 emission):" << std::endl;
+  Logger::info << "\t--synteny-dir <DIR> (per-family <DIR>/<family>.syn: lines "
+               << "'geneA geneB 1|0|NA' for same-genome pairs, or 'gene NA'; "
+               << "1 = anchor pair of a collinear duplicated block)"
+               << std::endl;
+  Logger::info << "\t--synteny-params <sigmaW,sigmaN> (starting P(collinear) "
+               << "for WGD-derived / other pairs; default 0.5,0.05)" << std::endl;
+  Logger::info << "\t--fix-synteny (do not optimize sigmaW, sigmaN)" << std::endl;
+  Logger::info << "\t--synteny-unlisted-na (unlisted same-genome pairs are NA "
+               << "instead of y=0)" << std::endl;
 
   Logger::info << "Reconciliation model options:" << std::endl;
   Logger::info << "\t-r, --rec-model <reconciliation model> "

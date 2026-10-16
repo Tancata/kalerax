@@ -18,10 +18,22 @@
 > suppresses the bulky per-family output (keeping the summaries, `wgdSummary.txt`
 > and logs) for large runs.
 >
+> **Synteny (`--synteny-dir`).** Per-family collinearity observations for
+> same-genome gene pairs are integrated into the reconciliation likelihood, so
+> WGD can be separated from bursts of small-scale duplication and LORe from
+> parallel SSDs — see [`SYNTENY.md`](SYNTENY.md) and
+> `scripts/make_synteny_files.py`.
+>
+> **Event export.** Sampled reconciliations are drawn from the fitted WGD/LORe
+> model: WGD ohnolog splits are counted in a separate `wgd_duplications` column
+> of the per-species event counts (the `duplications` column holds SSDs only)
+> and are labelled `W` / `:WGD=Y` in the sampled gene trees.
+>
 > 📄 **Start here: [`WGD_REPORT.md`](WGD_REPORT.md)** — a short, readable report
 > covering the implementation, a benchmark against WHALE, and what allowing
 > horizontal transfers (DL vs DTL) does to the evidence for WGD;
-> [`DTL_LORE.md`](DTL_LORE.md) documents the DTL+LORe model.
+> [`DTL_LORE.md`](DTL_LORE.md) documents the DTL+LORe model;
+> [`SYNTENY.md`](SYNTENY.md) documents the synteny emission.
 >
 > The WGD/LORe code lives mainly in `src/ale/UndatedDLMultiModel.hpp` and
 > `src/ale/UndatedDTLMultiModel.hpp`, exposed via the `--wgd` and `--lore`
