@@ -692,6 +692,17 @@ void run(AleArguments &args) {
       args.optimizationClassFile, startingRates, !args.fixRates,
       args.optVerbose, args.output);
   speciesTreeOptimizer.getEvaluator().setSummaryOnly(args.summaryOnly);
+  if (args.orderedDupWeights) {
+    if (args.reconciliationModelStr != "UndatedDTL") {
+      Logger::info << "Note: --ordered-dup-weights has no effect under "
+                   << args.reconciliationModelStr << " (UndatedDTL only)"
+                   << std::endl;
+    } else {
+      Logger::timed << "Duplication/WGD split weight set to 2 relative to "
+                    << "transfers (--ordered-dup-weights)" << std::endl;
+    }
+    speciesTreeOptimizer.getEvaluator().setDupSplitWeight(2.0);
+  }
   // declare any command-line WGDs on the (now constructed) species tree, or
   // restore those already recovered from the checkpoint on a resumed run
   declareWGDs(args, speciesTreeOptimizer, checkpointDetected);

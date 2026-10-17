@@ -104,6 +104,40 @@ kalerax -f families.txt -s species_tree.nw --rec-model UndatedDTL \
   the LORe signal.
 - Like the rest of the WGD/LORe code, this is a research prototype.
 
+## Duplication vs transfer weighting (`--ordered-dup-weights`, October 2026)
+
+The undated DTL recursion inherited from ALE/AleRax weights a duplication split
+once per *unordered* pair of child clades (`P_D · R(γ′) · R(γ″)`), and the WGD /
+LORe doubling bracket uses the same convention. A transfer split, in contrast,
+sums both assignments of the children to the "stays" and "is transferred"
+copies (`P_T · [R_e(γ′) T(γ″) + R_e(γ″) T(γ′)]`). Under the forward process,
+where a duplication or WGD produces two exchangeable copies, each D or WGD node
+therefore receives half the weight of a T node.
+
+- **UndatedDL is unaffected.** Without transfers the factor is a constant per
+  gene tree and cancels from every likelihood ratio and estimate. A forward
+  simulator reproduces kalerax's DL (+WGD AORe/LORe) shape probabilities exactly.
+- **UndatedDTL is affected.** The same cherry can be explained by D or by T, so
+  the default weighting biases D vs T competition. In simulations on an 11-taxon
+  tree (2000 families/replicate) the default gave D̂ −5%, T̂ +13% and q̂ about −5%;
+  exported scenarios under-counted WGD splits by about 8% and over-counted
+  transfers by about 21%.
+- **`--ordered-dup-weights`** multiplies every duplication split (the D event and
+  the doubling-bracket split used by the WGD transform, LORe resolution and the
+  U-state sampler) by 2 under UndatedDTL. The likelihood, the reconciliation
+  backtrace and the LORe resolution sampler use the same weights. The flag
+  leaves UndatedDL unchanged and is **off by default** (ALE/AleRax numerics). With
+  the flag, the simulated biases fall to D̂ about −1%, T̂ about +4% and q̂ about −2%.
+  Likelihoods with and without the flag are on different scales, so do not mix
+  them in one LRT.
+
+Tests: `tests/dtl_dup_weight_regression.sh` checks that the flag is a no-op under
+UndatedDL. It also runs `tests/dtl_dup_weight_concordance.py`, a forward-simulation
+shape-frequency test using `scripts/kalerax_sim.py`. With the flag, two DTL
+parameter sets that differ only in T give the same freq/likelihood ratio for
+every gene-tree shape (χ² about the number of shapes); without it they do not.
+`tests/export_consistency.sh` includes two DTL configurations with the flag.
+
 ## Resolved issue: exported scenarios ignored the WGD (October 2026)
 
 The stock scenario sampler (`MultiModel::backtrace`) picked a speciation using

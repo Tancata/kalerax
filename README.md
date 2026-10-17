@@ -18,6 +18,10 @@
 > suppresses the bulky per-family output (keeping the summaries, `wgdSummary.txt`
 > and logs) for large runs.
 >
+> **DTL weighting (`--ordered-dup-weights`).** Under `UndatedDTL`, weights
+> duplication and WGD splits ×2 so that D vs T competition matches the forward
+> process (off by default = ALE/AleRax numerics; see [`DTL_LORE.md`](DTL_LORE.md)).
+>
 > **Synteny (`--synteny-dir`).** Per-family collinearity observations for
 > same-genome gene pairs are integrated into the reconciliation likelihood, so
 > WGD can be separated from bursts of small-scale duplication and LORe from

@@ -2,7 +2,8 @@
 # Exported-scenario consistency gate: the WGD/LORe-aware sampler must draw from
 # the exact posterior. Compares, for DL/DTL x AORe/LORe, the exact posterior
 # expectation E[# marked pairs at WGD splits] = d lnL / d ln(sigmaW) with its
-# Monte-Carlo estimate from exported scenarios (z-test, |z| < 4).
+# Monte-Carlo estimate from exported scenarios (z-test, |z| < 4). The last two
+# configurations use the --ordered-dup-weights split weight (2) under DTL.
 # usage: export_consistency.sh [path/to/build/bin]
 set -euo pipefail
 BINDIR="${1:-$(dirname "$0")/../build/bin}"
@@ -17,9 +18,9 @@ E
 printf "A1_1\tA1\nA2_1\tA2\nB1_1\tB1\nB1_2\tB1\nB2_1\tB2\nB2_2\tB2\nOG_1\tOG\n" > $W/map.link
 printf "B1_1 B1_2 1\nB2_1 B2_2 1\n" > $W/syn.txt
 status=0
-for cfg in "DL 0.6 1.0 0.1 0.1" "DL 0.6 0.5 0.5 0.05" "DTL 0.6 1.0 0.1 0.1" "DTL 0.6 0.5 0.5 0.05" "DL 0.2 0.3 0.5 0.05"; do
+for cfg in "DL 0.6 1.0 0.1 0.1" "DL 0.6 0.5 0.5 0.05" "DTL 0.6 1.0 0.1 0.1" "DTL 0.6 0.5 0.5 0.05" "DL 0.2 0.3 0.5 0.05" "DTL 0.6 1.0 0.1 0.1 2" "DTL 0.6 0.5 0.5 0.05 2"; do
   set -- $cfg
-  out=$("$BINDIR/export_consistency" $W/sp.nw $W/g.nw $W/map.link B1 B2 $2 $3 $1 30000 $W/syn.txt $W/t.trees 17 $4 $5 | head -1)
+  out=$("$BINDIR/export_consistency" $W/sp.nw $W/g.nw $W/map.link B1 B2 $2 $3 $1 30000 $W/syn.txt $W/t.trees 17 $4 $5 ${6:-1} | head -1)
   exact=$(echo "$out" | sed -E 's/.*dlnL\/dln\(sigmaW\)=([0-9.eE+-]+).*/\1/')
   python3 - $W/t.trees "$exact" "$cfg" <<'E' || status=1
 import sys, re, math

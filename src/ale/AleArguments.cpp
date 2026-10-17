@@ -63,7 +63,7 @@ AleArguments::AleArguments(int iargc, char **iargv)
       trimFamilyRatio(DEFAULT_TRIM_FAMILY_RATIO),
       maxCladeSplitRatio(DEFAULT_MAX_SPLIT_RATIO),
       sampleFrequency(DEFAULT_SAMPLE_FREQUENCY), output("alerax_output"),
-      geneTreeSamples(100), cleanupCCP(false), summaryOnly(false), sigmaW0(0.5), sigmaN0(0.05),
+      geneTreeSamples(100), cleanupCCP(false), summaryOnly(false), orderedDupWeights(false), sigmaW0(0.5), sigmaN0(0.05),
       fixSynteny(false), syntenyUnlistedNA(false), seed(123),
       randomSpeciesRoot(false), optVerbose(false) {
   if (argc == 1) {
@@ -116,6 +116,8 @@ AleArguments::AleArguments(int iargc, char **iargv)
       loreWgds.push_back(parseWGDDeclaration(std::string(argv[++i])));
     } else if (arg == "--summary-only") {
       summaryOnly = true;
+    } else if (arg == "--ordered-dup-weights") {
+      orderedDupWeights = true;
     } else if (arg == "--synteny-dir") {
       syntenyDir = std::string(argv[++i]);
     } else if (arg == "--synteny-params") {
@@ -428,6 +430,11 @@ void AleArguments::printHelp() const {
   Logger::info << "\t-g, --gene-tree-samples <number of samples>" << std::endl;
   Logger::info << "\t--seed <seed>" << std::endl;
   Logger::info << "\t--cleanup-ccp" << std::endl;
+  Logger::info << "\t--ordered-dup-weights (UndatedDTL: weight duplication "
+               << "and WGD/LORe doubling splits x2 relative to transfers, so "
+               << "that D vs T competition matches the forward process; the "
+               << "default is the ALE/AleRax convention; no effect under "
+               << "UndatedDL; see DTL_LORE.md)" << std::endl;
   Logger::info << "\t--summary-only (suppress the bulky per-family output: the "
                << "reconciliations/all/ samples, RecPhyloXML, highway candidate "
                << "tests and CCP binaries; keep the summaries, global totals, "

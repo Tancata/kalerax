@@ -126,6 +126,7 @@ public:
   // RecPhyloXML, highway candidate tests, CCP binaries); keep the summaries,
   // global totals, wgdSummary, species trees, model parameters and logs.
   bool summaryOnly;
+  bool orderedDupWeights;
 
   // synteny (Layer 1): per-family <dir>/<family>.syn pair observations
   std::string syntenyDir;

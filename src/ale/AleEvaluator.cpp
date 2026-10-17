@@ -146,8 +146,18 @@ void AleEvaluator::resetEvaluation(unsigned int i, bool highPrecision) {
   }
 }
 
+void AleEvaluator::setDupSplitWeight(double w) {
+  _dupSplitWeight = w;
+  for (auto &evaluation : _evaluations) {
+    evaluation->setDupSplitWeight(w);
+  }
+}
+
 void AleEvaluator::reapplyFamilyState(unsigned int i) {
   auto &ev = _evaluations[i];
+  if (_dupSplitWeight != 1.0) {
+    ev->setDupSplitWeight(_dupSplitWeight);
+  }
   for (unsigned int j = 0; j < _wgdNodes.size() && j < _wgdQ.size(); ++j) {
     ev->setWGD(_wgdNodes[j], _wgdQ[j]);
   }

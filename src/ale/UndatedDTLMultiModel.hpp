@@ -31,6 +31,15 @@ public:
   virtual void setRates(const RatesVector &rates);
   virtual void setHighways(const std::vector<Highway> &highways);
 
+  // --ordered-dup-weights: weight of every duplication split (D event and the
+  // WGD/LORe doubling-bracket split) relative to transfer splits. See
+  // MultiModel::setDupSplitWeight and DTL_LORE.md.
+  void setDupSplitWeight(double w) override {
+    _dupSplitWeight = w;
+    this->invalidateAllSpeciesNodes();
+    this->resetCache();
+  }
+
   // --- WGD extension ---
   // Declare a WGD at the top of species branch e with retention prob q.
   void setWGD(unsigned int e, double q) override {
@@ -129,6 +138,7 @@ private:
   // --- LORe (delayed rediploidization) extension ---
   std::vector<REAL> _uEU;          // unresolved (tetrasomic) extinction, per (e,cat)
   std::vector<double> _resolutionProbs; // per species branch: r in [0,1]; 1==AORe
+  double _dupSplitWeight = 1.0; // duplication-split weight (1 = ALE convention)
   // resolution-backtrace: number of lineages abandoned at the resample cap (a
   // degenerate cell where only DL/TL "nothing observed" events have mass).
   size_t _btCapHits = 0;
@@ -211,7 +221,7 @@ private:
       const auto &cs = splits[k];
       // WGD split: synteny-weighted frequency (== ccp frequency without synteny)
       REAL t = _dtlclvs[cs.left]._uq[ec] * _dtlclvs[cs.right]._uq[ec] *
-               this->synWgdFreq(cid, k, cs.frequency);
+               this->synWgdFreq(cid, k, cs.frequency) * _dupSplitWeight;
       scale(t);
       split += t;
     }
@@ -866,7 +876,7 @@ bool UndatedDTLMultiModel<REAL>::computeProbability(
     }
     // - D event
     temp = _dtlclvs[cidLeft]._uq[ec] * _dtlclvs[cidRight]._uq[ec] *
-           (_PD[ec] * freq);
+           (_PD[ec] * freq * _dupSplitWeight);
     scale(temp);
     proba += temp;
     if (recCell && proba > maxProba) {
@@ -1348,7 +1358,7 @@ bool UndatedDTLMultiModel<REAL>::sampleUEventImpl(CID cid, corax_rnode_t *sp,
     for (size_t k = 0; k < splits.size(); ++k) {
       const auto &cs = splits[k];
       REAL t = _dtlclvs[cs.left]._uq[ec] * _dtlclvs[cs.right]._uq[ec] *
-               this->synWgdFreq(cid, k, cs.frequency);
+               this->synWgdFreq(cid, k, cs.frequency) * _dupSplitWeight;
       scale(t);
       dAcc = dAcc + t;
       if (dAcc > dSample) {

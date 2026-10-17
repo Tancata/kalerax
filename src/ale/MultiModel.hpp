@@ -54,6 +54,15 @@ public:
   // retention probability q. No-op for models that do not implement WGD.
   virtual void setWGD(unsigned int /*speciesNode*/, double /*q*/) {}
 
+  // Weight applied to every duplication split (SSD D event and the WGD/LORe
+  // doubling-bracket split) in models that also have transfers. 1 (default)
+  // = the ALE/AleRax undated convention, which counts an unordered D split
+  // once while a T split sums both stay/transfer orderings; 2 = weights that
+  // match the forward process (two exchangeable copies) relative to transfers
+  // (--ordered-dup-weights). No-op for models without transfers (UndatedDL),
+  // where the factor is a per-gene-tree constant.
+  virtual void setDupSplitWeight(double /*w*/) {}
+
   // Set the (global) LORe resolution probability r in [0,1]. r=1 recovers the
   // immediate-resolution (WHALE/AORe) WGD model. No-op for models without LORe.
   virtual void setResolutionProb(double /*r*/) {}

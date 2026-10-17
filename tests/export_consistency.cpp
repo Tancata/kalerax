@@ -13,6 +13,7 @@
 //
 // usage: export_consistency <species.nw> <genetrees.nw> <mapping.link>
 //          <taxonA> <taxonB> <q> <r> <DL|DTL> <samples> <synfile> <out.trees>
+//          [seed] [sigmaW] [sigmaN] [dupSplitWeight (1 = default, 2 = --ordered-dup-weights)]
 
 #include <cmath>
 #include <cstdio>
@@ -57,7 +58,7 @@ template <class MODEL>
 static int run(MODEL &model, PLLRootedTree &speciesTree, const std::string &tA,
                const std::string &tB, double q, double r, unsigned int samples,
                const SyntenyInput &syn, const std::string &out, double sW,
-               double sN) {
+               double sN, double dupW) {
   auto labelToNode = speciesTree.getLabelToNode(false);
   auto *w = speciesTree.getLCA(labelToNode[tA], labelToNode[tB]);
   model.setWGD(w->node_index, q);
@@ -68,6 +69,7 @@ static int run(MODEL &model, PLLRootedTree &speciesTree, const std::string &tA,
     }
   }
   model.setResolutionProbVector(rv);
+  model.setDupSplitWeight(dupW); // --ordered-dup-weights (DTL only)
   model.setSynteny(syn);
   // with only y=1 pairs marked (others NA) the identity holds for any
   // sigmaW >= sigmaN; sigmaW == sigmaN is the plain (unweighted) model
@@ -100,6 +102,7 @@ int main(int argc, char **argv) {
   Random::setSeed(argc > 12 ? atoi(argv[12]) : 42);
   double sN = argc > 14 ? atof(argv[14]) : 0.1;
   double sW = argc > 13 ? atof(argv[13]) : sN;
+  double dupW = argc > 15 ? atof(argv[15]) : 1.0;
   if (sW < sN) { std::fprintf(stderr, "need sigmaW >= sigmaN\n"); return 2; }
   PLLRootedTree speciesTree(argv[1], true);
   GeneSpeciesMapping mapping;
@@ -115,12 +118,12 @@ int main(int argc, char **argv) {
   if (m == "DL") {
     UndatedDLMultiModel<double> model(speciesTree, mapping,
                                       makeInfo(RecModel::UndatedDL), ccpFile);
-    rc = run(model, speciesTree, argv[4], argv[5], q, r, samples, syn, argv[11], sW, sN);
+    rc = run(model, speciesTree, argv[4], argv[5], q, r, samples, syn, argv[11], sW, sN, dupW);
   } else {
     DatedTree dated(speciesTree, false);
     UndatedDTLMultiModel<double> model(dated, mapping,
                                        makeInfo(RecModel::UndatedDTL), ccpFile);
-    rc = run(model, speciesTree, argv[4], argv[5], q, r, samples, syn, argv[11], sW, sN);
+    rc = run(model, speciesTree, argv[4], argv[5], q, r, samples, syn, argv[11], sW, sN, dupW);
   }
   std::remove(ccpFile.c_str());
   return rc;

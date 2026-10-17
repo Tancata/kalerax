@@ -214,6 +214,15 @@ public:
    */
   void setSummaryOnly(bool on) { _summaryOnly = on; }
 
+  /**
+   *  --ordered-dup-weights: weight of duplication (D and WGD/LORe doubling)
+   *  splits relative to transfer splits in UndatedDTL (1 = ALE convention,
+   *  2 = forward-process weights). Applied to every family evaluation and
+   *  re-applied when an evaluation is rebuilt (precision switch).
+   */
+  void setDupSplitWeight(double w);
+  double getDupSplitWeight() const { return _dupSplitWeight; }
+
   // --- Synteny (Layer 1) ---
   // Load <dir>/<family>.syn for every local family (missing file = no
   // synteny for that family). `state` is the checkpointed {sigmaW, sigmaN};
@@ -387,6 +396,7 @@ private:
   bool &_optimizeResolution;
   // suppress the bulky per-family output (--summary-only)
   bool _summaryOnly = false;
+  double _dupSplitWeight = 1.0;
   std::vector<int> _highPrecisions;
   // LL buffer for global families
   std::vector<double> _snapshotPerFamilyLL;
