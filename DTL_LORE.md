@@ -104,39 +104,64 @@ kalerax -f families.txt -s species_tree.nw --rec-model UndatedDTL \
   the LORe signal.
 - Like the rest of the WGD/LORe code, this is a research prototype.
 
-## Duplication vs transfer weighting (`--ordered-dup-weights`, October 2026)
+## Duplication vs transfer weighting (default since October 2026; `--ale-dup-weights`)
 
-The undated DTL recursion inherited from ALE/AleRax weights a duplication split
-once per *unordered* pair of child clades (`P_D · R(γ′) · R(γ″)`), and the WGD /
-LORe doubling bracket uses the same convention. A transfer split, in contrast,
-sums both assignments of the children to the "stays" and "is transferred"
-copies (`P_T · [R_e(γ′) T(γ″) + R_e(γ″) T(γ′)]`). Under the forward process,
-where a duplication or WGD produces two exchangeable copies, each D or WGD node
-therefore receives half the weight of a T node.
+The undated DTL recursion inherited from ALE/AleRax weights a duplication split,
+and the WGD / LORe doubling-bracket split, once per *unordered* pair of child
+clades (`P_D · R(γ′) · R(γ″)`). A transfer split, by contrast, sums both
+assignments of the children to the "stays" and "is transferred" copies
+(`P_T · [R_e(γ′) T(γ″) + R_e(γ″) T(γ′)]`). Under the forward process, where a
+duplication or WGD produces two exchangeable copies, each D or WGD node
+therefore received half the weight of a T node.
 
-- **UndatedDL is unaffected.** Without transfers the factor is a constant per
-  gene tree and cancels from every likelihood ratio and estimate. A forward
-  simulator reproduces kalerax's DL (+WGD AORe/LORe) shape probabilities exactly.
-- **UndatedDTL is affected.** The same cherry can be explained by D or by T, so
-  the default weighting biases D vs T competition. In simulations on an 11-taxon
-  tree (2000 families/replicate) the default gave D̂ −5%, T̂ +13% and q̂ about −5%;
-  exported scenarios under-counted WGD splits by about 8% and over-counted
-  transfers by about 21%.
-- **`--ordered-dup-weights`** multiplies every duplication split (the D event and
-  the doubling-bracket split used by the WGD transform, LORe resolution and the
-  U-state sampler) by 2 under UndatedDTL. The likelihood, the reconciliation
-  backtrace and the LORe resolution sampler use the same weights. The flag
-  leaves UndatedDL unchanged and is **off by default** (ALE/AleRax numerics). With
-  the flag, the simulated biases fall to D̂ about −1%, T̂ about +4% and q̂ about −2%.
-  Likelihoods with and without the flag are on different scales, so do not mix
+**Default (UndatedDTL):** every duplication split is now weighted ×2. This covers
+the D event and the doubling-bracket split used by the WGD transform, LORe
+resolution and the U-state sampler. The likelihood, the reconciliation backtrace
+and the LORe resolution sampler all use the same weights.
+
+**`--ale-dup-weights`** restores the ALE/AleRax numerics, e.g. to reproduce
+older runs or to compare with upstream AleRax. `--ordered-dup-weights` (the
+opt-in flag of commit 5add0d8) is still accepted and is now the default.
+UndatedDL is unaffected either way: without transfers the factor is a constant
+per gene tree.
+
+**Evidence**
+
+- **Concordance with my own forward simulator.** `scripts/kalerax_sim.py`
+  mirrors these recursions. Its DL (+WGD AORe/LORe) shape probabilities match
+  kalerax exactly. DTL matches only with the ×2 weights: with the default, two
+  parameter sets that differ only in T give the same frequency/likelihood ratio
+  for every gene-tree shape (χ² ≈ the number of shapes); with
+  `--ale-dup-weights` they do not.
+- **Independent check with Zombi** (Davín et al. 2020, a dated forward
+  simulator with additive transfers to contemporaneous lineages; 12 species,
+  4,200 simulated families per configuration of which 2,200–3,100 pass the
+  ≥4-species filter; transfer rate varied). Exported D and T event totals were
+  compared with Zombi's true observable events. The ALE weighting under-counted
+  D by 11–17% and over-counted T by 13–42% in every configuration; with the
+  default, D was within −2% to +4% and T within +2% to +13%. The numbers are in
+  `validation/zombi_dup_weights.md`.
+- **Effect in simulations on an 11-taxon tree** (2000 families per replicate).
+  ALE weighting gave D̂ −5%, T̂ +13% and q̂ about −5%; exported WGD splits
+  were about 8% low and transfers about 21% high. With the default, the biases
+  are about −1%, +4% and −2%.
+
+**Comparability**
+
+- DTL likelihoods from the two weightings are on different scales; never mix
   them in one LRT.
+- **DTL results produced before this change used the ALE weighting and should be
+  re-run** (or reproduced with `--ale-dup-weights`).
+- The weighting is written to the log and to
+  `model_parameters/dup_weighting.txt` (`forward_process 2` or `ale 1`). It is
+  also stored in the checkpoint: a resumed run always keeps the weighting it
+  started with, and a checkpoint without a marker (created before the switch)
+  resumes with the ALE weighting.
 
-Tests: `tests/dtl_dup_weight_regression.sh` checks that the flag is a no-op under
-UndatedDL. It also runs `tests/dtl_dup_weight_concordance.py`, a forward-simulation
-shape-frequency test using `scripts/kalerax_sim.py`. With the flag, two DTL
-parameter sets that differ only in T give the same freq/likelihood ratio for
-every gene-tree shape (χ² about the number of shapes); without it they do not.
-`tests/export_consistency.sh` includes two DTL configurations with the flag.
+**Tests:** `tests/dtl_dup_weight_regression.sh` checks the DL no-op, the labels,
+the checkpoint marker and the pre-switch resume, then runs the forward-simulation
+concordance gate. `tests/export_consistency.sh` includes DTL configurations at
+both weights.
 
 ## Resolved issue: exported scenarios ignored the WGD (October 2026)
 

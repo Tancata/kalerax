@@ -193,6 +193,11 @@ WGD — i.e. account for the extra gene copies that would otherwise be evidence
 for genome doubling? We ported the WGD transform into the DTL model and re-ran
 the same analysis (transfers with the realistic `PARENTS` constraint).
 
+> Note (October 2026): the DTL row below was computed with the ALE/AleRax
+> duplication weighting, which is now `--ale-dup-weights`. The default DTL
+> weighting changed (see `DTL_LORE.md`), so a re-run with the current default
+> gives different DTL likelihoods.
+
 | model | null LL | +PPAT LL | q̂[PPAT] | 2·ΔLL | p | detect |
 |---|---|---|---|---|---|---|
 | **DL** (no transfers) | −362.4 | −360.7 | 0.31 | 3.31 | 0.034 | yes |

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Regression gate for --ordered-dup-weights (UndatedDTL).
+"""Regression gate for the UndatedDTL duplication weighting (default = forward
+process; --ale-dup-weights = ALE/AleRax convention).
 
 Forward-simulates gene families (scripts/kalerax_sim.py) under two UndatedDTL
 parameter sets that differ only in the transfer rate, collapses every family
@@ -7,12 +8,12 @@ with 3-6 genes to its unrooted species-labelled shape, and scores one
 representative per frequent shape with kalerax at FIXED rates
 (--fix-rates, per_fam_likelihoods.txt). For an exact likelihood (up to a
 parameter-independent per-tree constant) the ratio X = freq(shape)/L(shape)
-must be the same under both parameter sets. With --ordered-dup-weights this
-holds (chi2/df ~ 1); with the default ALE weighting it does not, because a
+must be the same under both parameter sets. With the default (forward-process)
+weighting this holds (chi2/df ~ 1); with --ale-dup-weights it does not, because a
 duplication split is counted once while a transfer split sums both orderings.
 
 usage: dtl_dup_weight_concordance.py <kalerax> <workdir> [N]
-exit 0 = PASS (flag concordant AND default discordant), 1 = FAIL
+exit 0 = PASS (default concordant AND --ale-dup-weights discordant), 1 = FAIL
 """
 import itertools, os, subprocess, sys
 from collections import Counter, defaultdict
@@ -87,8 +88,8 @@ def run(kalerax, wd, N):
                    "--gene-tree-rooting", "UNIFORM", "--species-tree-search", "SKIP", "--summary-only",
                    "--gene-tree-samples", "0", "--fix-rates", "--d", str(D), "--l", str(L), "--t", str(T),
                    "--min-covered-species", "1", "--skip-family-filtering", "--seed", "1", "-p", out]
-            if flag:
-                cmd.append("--ordered-dup-weights")
+            if not flag:
+                cmd.append("--ale-dup-weights")
             subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
             ll = dict(l.split() for l in open(os.path.join(out, "per_fam_likelihoods.txt")) if l.strip())
             for i, k in enumerate(top):
@@ -107,9 +108,9 @@ if __name__ == "__main__":
     N = int(sys.argv[3]) if len(sys.argv) > 3 else 600000
     res = run(kalerax, wd, N)
     (c0, n0), (c1, n1) = res[False], res[True]
-    print(f"  default weights:        chi2 = {c0:.1f} on {n0} shapes")
-    print(f"  --ordered-dup-weights:  chi2 = {c1:.1f} on {n1} shapes")
+    print(f"  --ale-dup-weights:              chi2 = {c0:.1f} on {n0} shapes")
+    print(f"  default (forward-process):      chi2 = {c1:.1f} on {n1} shapes")
     ok = n1 >= 20 and c1 / n1 < 1.8 and c0 / n0 > 4.0
-    print("PASS: ordered duplication weights are concordant with forward simulation"
+    print("PASS: default duplication weights are concordant with forward simulation"
           if ok else "FAIL: dup-weight concordance")
     sys.exit(0 if ok else 1)

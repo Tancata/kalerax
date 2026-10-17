@@ -1,3 +1,4 @@
+#include <fstream>
 #include <cassert>
 #include <cstdio>
 #include <set>
@@ -399,6 +400,32 @@ Parameters buildStartingRates(const AleArguments &args,
   return res;
 }
 
+// --- duplication-weighting checkpoint marker ---
+static double gDupWeight = 2.0;
+static std::string dupMarkerPath(const std::string &ckpDir) {
+  return FileSystem::joinPaths(ckpDir, "dup_weighting.txt");
+}
+static bool fileExistsMarker(const std::string &ckpDir) {
+  std::ifstream is(dupMarkerPath(ckpDir));
+  return is.good();
+}
+// missing marker = checkpoint written before the default switch = ALE (1)
+static double readDupWeightMarker(const std::string &ckpDir) {
+  std::ifstream is(dupMarkerPath(ckpDir));
+  double w = 1.0;
+  if (is.good()) {
+    is >> w;
+  }
+  return w;
+}
+static void writeDupWeightMarker(const std::string &ckpDir, double w) {
+  if (ParallelContext::getRank() == 0) {
+    std::ofstream os(dupMarkerPath(ckpDir));
+    os << w << std::endl;
+  }
+  ParallelContext::barrier();
+}
+
 void initCheckpoint(const AleArguments &args, const Families &families,
                     const std::string &ckpDir) {
   FileSystem::mkdir(ckpDir, true);
@@ -692,16 +719,40 @@ void run(AleArguments &args) {
       args.optimizationClassFile, startingRates, !args.fixRates,
       args.optVerbose, args.output);
   speciesTreeOptimizer.getEvaluator().setSummaryOnly(args.summaryOnly);
-  if (args.orderedDupWeights) {
-    if (args.reconciliationModelStr != "UndatedDTL") {
-      Logger::info << "Note: --ordered-dup-weights has no effect under "
-                   << args.reconciliationModelStr << " (UndatedDTL only)"
-                   << std::endl;
-    } else {
-      Logger::timed << "Duplication/WGD split weight set to 2 relative to "
-                    << "transfers (--ordered-dup-weights)" << std::endl;
+  // Duplication vs transfer split weighting (UndatedDTL). Default: forward-
+  // process weights (2); --ale-dup-weights: ALE/AleRax convention (1). A
+  // resumed run always keeps the weighting it started with (checkpoint
+  // marker); a checkpoint without a marker predates the default switch and
+  // therefore used the ALE weighting.
+  {
+    if (args.aleDupWeights && args.orderedDupWeights) {
+      Logger::info << "\nError: --ale-dup-weights and --ordered-dup-weights "
+                   << "are mutually exclusive" << std::endl;
+      ParallelContext::abort(0);
     }
-    speciesTreeOptimizer.getEvaluator().setDupSplitWeight(2.0);
+    double dupW = args.aleDupWeights ? 1.0 : 2.0;
+    if (checkpointDetected) {
+      double ckpW = readDupWeightMarker(ckpDir);
+      if (ckpW != dupW) {
+        Logger::info << "Note: resuming a checkpoint created with "
+                     << (ckpW == 1.0 ? "ALE (--ale-dup-weights)"
+                                     : "forward-process")
+                     << " duplication weighting; keeping it"
+                     << (ckpW == 1.0 && !fileExistsMarker(ckpDir)
+                             ? " (checkpoint predates the default switch)"
+                             : "")
+                     << std::endl;
+      }
+      dupW = ckpW;
+    }
+    gDupWeight = dupW;
+    if (args.reconciliationModelStr == "UndatedDTL") {
+      Logger::timed << "Duplication/WGD vs transfer split weighting: "
+                    << (dupW == 2.0 ? "forward process (default)"
+                                    : "ALE/AleRax (--ale-dup-weights)")
+                    << std::endl;
+    }
+    speciesTreeOptimizer.getEvaluator().setDupSplitWeight(dupW);
   }
   // declare any command-line WGDs on the (now constructed) species tree, or
   // restore those already recovered from the checkpoint on a resumed run
@@ -714,6 +765,7 @@ void run(AleArguments &args) {
   }
   if (!checkpointDetected) {
     initCheckpoint(args, families, ckpDir);
+    writeDupWeightMarker(ckpDir, gDupWeight);
     speciesTreeOptimizer.setCurrentStep(AleStep::SpeciesTreeOpt);
     speciesTreeOptimizer.saveCheckpoint();
   }
