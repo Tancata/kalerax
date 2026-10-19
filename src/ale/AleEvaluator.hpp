@@ -232,6 +232,11 @@ public:
   bool hasSynteny() const { return _synLoaded; }
   void setSyntenyParams(double sigmaW, double sigmaN);
   double getSigmaW() const { return _sigmaW; }
+  // --synteny-min-sigmaW: lower bound on sigma_W when it is fitted, i.e. the
+  // WGD hypothesis requires a minimum collinearity of surviving ohnologs.
+  // Must be set before loadSynteny(). 0 = unconstrained (previous behaviour).
+  void setSigmaWMin(double m) { _sigmaWMin = m; }
+  double getSigmaWMin() const { return _sigmaWMin; }
   double getSigmaN() const { return _sigmaN; }
   // global (all ranks) observed pair totals: y=1, y=0, families with data
   void getSyntenyTotals(unsigned int &n1, unsigned int &n0,
@@ -372,6 +377,7 @@ private:
   bool _synLoaded = false;
   bool _fixSynteny = false;
   double _sigmaW = 0.5;
+  double _sigmaWMin = 0.0;
   double _sigmaN = 0.05;
   std::vector<double> *_synState = nullptr;
   double optimizeSynteny(bool thorough);

@@ -759,6 +759,7 @@ void run(AleArguments &args) {
   declareWGDs(args, speciesTreeOptimizer, checkpointDetected);
   // synteny (Layer 1) pair observations, if requested
   if (!args.syntenyDir.empty()) {
+    speciesTreeOptimizer.getEvaluator().setSigmaWMin(args.sigmaWMin);
     speciesTreeOptimizer.getEvaluator().loadSynteny(
         args.syntenyDir, args.syntenyUnlistedNA, args.sigmaW0, args.sigmaN0,
         args.fixSynteny, speciesTreeOptimizer.getSyntenyParams());

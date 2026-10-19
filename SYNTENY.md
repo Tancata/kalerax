@@ -89,6 +89,7 @@ duplicates look like single-copy genes and cannot be repaired by the emission.
 | `--synteny-params sigmaW,sigmaN` | starting values (default `0.5,0.05`) |
 | `--fix-synteny` | keep sigma_W, sigma_N fixed at the given values |
 | `--synteny-unlisted-na` | unlisted same-genome pairs are NA instead of y = 0 |
+| `--synteny-min-sigmaW X` | fit sigma_W in [X, 1): a declared WGD must leave at least this fraction of its surviving ohnolog pairs collinear (default 0 = unconstrained) |
 
 ## Output
 
@@ -111,7 +112,48 @@ duplicates look like single-copy genes and cannot be repaired by the emission.
   reconciliation (a composite likelihood). The planned Layer 2 (block-coupled
   resolution histories) addresses that dependence.
 
+## Testing for a WGD with synteny (`--synteny-min-sigmaW`, `scripts/synteny_bootstrap.py`)
+
+Synteny only discriminates when sigma_W is clearly larger than sigma_N. Each
+collinear pair across a duplication node multiplies the WGD:SSD odds by
+sigma_W/sigma_N, and each non-collinear pair by (1−sigma_W)/(1−sigma_N). With
+sigma_W free and no real WGD, the WGD model can set sigma_W ≈ sigma_N, which
+makes the emission identical under both hypotheses. In simulations an SSD
+burst was then still called a WGD (2ΔlnL of several hundred per 2000 families).
+
+1. **Make collinearity part of H1.** Use `--synteny-min-sigmaW 0.3` (or similar)
+   in the WGD fit; the null fit is unchanged.
+   - When a real WGD is present, sigma_W is identified (about 0.7 in the
+     simulations) and the bound is not binding.
+   - On an SSD burst the bound cut 2ΔlnL from about 190 to about 12–13 (1200
+     families) or to 0 (2000 root-origin families).
+   - The value matters little: fixed values from 0.4 to 0.95 behaved alike.
+   - A small residual can remain, because with a small q the WGD can sit
+     selectively on the few nodes whose SSD pairs happen to be collinear.
+   - With several declared WGDs, sigma_W is shared. A secure WGD therefore
+     pins it for the others, so testing a candidate conditional on known WGDs
+     needs no external value.
+2. **Calibrate the statistic by parametric bootstrap, not χ².** Under H0, q sits
+   on its boundary and sigma_W is not identified. The pair-level emission is
+   also a composite likelihood that ignores within-block dependence: in
+   simulations with block-correlated collinearity among SSD pairs, 2ΔlnL
+   stayed in the hundreds even with sigma_W ≥ 0.7, while q-hat was only 1–2%.
+   `scripts/synteny_bootstrap.py`:
+   - takes the observed null and WGD runs;
+   - simulates data under the fitted null (rates and sigma_N; optional
+     `--block-frac` for collinear SSD blocks, `--na-frac` for NA genes);
+   - refits both models identically and reports the null distribution of
+     2ΔlnL and a p-value.
+
+   A tiny q-hat together with a large ΔlnL is a warning sign in its own right.
+3. **Report a sensitivity profile:** 2ΔlnL for a few fixed sigma_W values
+   (`--fix-synteny --synteny-params W,N`).
+
 ## Validation (bundled tests)
+
+- `tests/synteny_bound_regression.py <kalerax> <workdir> [families]`: simulated
+  SSD burst — the bound removes most of the spurious WGD signal that a free
+  sigma_W lets through; real WGD — the bound does not change the fit.
 
 - `tests/synteny_regression.sh`: (1) an empty synteny dir reproduces the
   no-synteny per-family log-likelihoods exactly; (2) discrimination: on a toy

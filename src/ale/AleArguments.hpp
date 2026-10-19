@@ -134,6 +134,7 @@ public:
   double sigmaW0;
   double sigmaN0;
   bool fixSynteny;
+  double sigmaWMin; // --synteny-min-sigmaW (0 = unconstrained)
   bool syntenyUnlistedNA;
 
   // random seed

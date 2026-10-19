@@ -319,3 +319,44 @@ def to_newick_bl(node, tree, rng, top, bot, fam_rate=1.0, noise_sd=0.3, min_bl=1
     d0 = depth(node, 0.0)
     s = "(" + rec(node.kids[0], d0) + "," + rec(node.kids[1], d0) + ");" if node.kids else None
     return s, mapping
+
+
+# ----------------------------------------------------------- synteny emission
+def synteny_lines(root, rng, sigma_w=0.7, sigma_n=0.03, na_frac=0.0, block=False, block_frac=None):
+    """Emission-level synteny observations for every same-genome gene pair.
+    Leaf names follow to_newick() order (<species>_g<k>). The LCA event of each
+    pair decides the emission: 'W' (WGD / LORe resolution split) -> y=1 w.p.
+    sigma_w, otherwise (D, T) -> sigma_n. block=True draws one y per (LCA node,
+    species), shared by all pairs of that node in that genome (block-level
+    collinearity, violating pairwise independence). block_frac in [0,1]: the
+    fraction of (node, species) groups that share one draw (block=True is
+    block_frac=1). na_frac: each gene is NA with this probability."""
+    if block_frac is None:
+        block_frac = 1.0 if block else 0.0
+    counter = [0]
+    out = []
+
+    def rec(v):
+        if v.kids is None:
+            counter[0] += 1
+            return {v.leaf: [f"{v.leaf}_g{counter[0]}"]}
+        a, b = rec(v.kids[0]), rec(v.kids[1])
+        for s in set(a) & set(b):
+            sig = sigma_w if v.event == "W" else sigma_n
+            yb = int(rng.random() < sig)
+            shared = rng.random() < block_frac
+            for x in a[s]:
+                for y in b[s]:
+                    yy = yb if shared else int(rng.random() < sig)
+                    out.append(f"{x} {y} {yy}")
+        for s, l in b.items():
+            a.setdefault(s, []).extend(l)
+        return a
+
+    allg = rec(root)
+    if na_frac > 0:
+        for s, gl in allg.items():
+            for g in gl:
+                if rng.random() < na_frac:
+                    out.append(f"{g} NA")
+    return out

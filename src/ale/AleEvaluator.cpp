@@ -230,6 +230,22 @@ void AleEvaluator::loadSynteny(const std::string &dir, bool unlistedNA,
                   << _sigmaW << " sigmaN=" << _sigmaN << std::endl;
     ParallelContext::abort(1);
   }
+  if (_sigmaWMin > 0.0) {
+    if (!(_sigmaWMin < 1.0)) {
+      Logger::error << "Error: --synteny-min-sigmaW must lie in [0,1)" << std::endl;
+      ParallelContext::abort(1);
+    }
+    if (_fixSynteny && _sigmaW < _sigmaWMin) {
+      Logger::error << "Error: --fix-synteny sigmaW=" << _sigmaW
+                    << " is below --synteny-min-sigmaW " << _sigmaWMin << std::endl;
+      ParallelContext::abort(1);
+    }
+    if (_sigmaW < _sigmaWMin) {
+      _sigmaW = _sigmaWMin; // start inside the constrained region
+    }
+    Logger::timed << "[Synteny] sigma_W constrained to [" << _sigmaWMin
+                  << ", 1) (--synteny-min-sigmaW)" << std::endl;
+  }
   _synInputs.assign(getLocalFamilyNumber(), nullptr);
   unsigned int filesRead = 0, badLines = 0;
   for (unsigned int i = 0; i < getLocalFamilyNumber(); ++i) {
@@ -338,7 +354,7 @@ double AleEvaluator::optimizeSynteny(bool thorough) {
   if (!_wgdNodes.empty()) {
     robustMax1D(
         [&](double x) { setSyntenyParams(x, _sigmaN); return computeLikelihood(); },
-        lo, hi, _sigmaW, grid, iters);
+        std::max(lo, _sigmaWMin), hi, std::max(_sigmaW, _sigmaWMin), grid, iters);
     // q and sigma_W trade off: re-refine each retention once
     for (unsigned int j = 0; j < _wgdNodes.size(); ++j) {
       auto node = _wgdNodes[j];

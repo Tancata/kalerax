@@ -723,9 +723,10 @@ void AleOptimizer::reconcile(unsigned int samples) {
     auto synFile = FileSystem::joinPaths(recDir, "syntenySummary.txt");
     ParallelOfstream sos(synFile, true);
     sos << "#sigma_W\tsigma_N\tfamilies_with_pairs\tpairs_collinear\t"
-        << "pairs_noncollinear" << std::endl;
+        << "pairs_noncollinear\tsigma_W_min" << std::endl;
     sos << _evaluator->getSigmaW() << "\t" << _evaluator->getSigmaN() << "\t"
-        << fams << "\t" << n1 << "\t" << n0 << std::endl;
+        << fams << "\t" << n1 << "\t" << n0 << "\t"
+        << _evaluator->getSigmaWMin() << std::endl;
     sos.close();
     Logger::timed << "Synteny summary written in " << synFile << std::endl;
   }

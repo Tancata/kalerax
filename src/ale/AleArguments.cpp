@@ -64,7 +64,7 @@ AleArguments::AleArguments(int iargc, char **iargv)
       maxCladeSplitRatio(DEFAULT_MAX_SPLIT_RATIO),
       sampleFrequency(DEFAULT_SAMPLE_FREQUENCY), output("alerax_output"),
       geneTreeSamples(100), cleanupCCP(false), summaryOnly(false), orderedDupWeights(false), aleDupWeights(false), sigmaW0(0.5), sigmaN0(0.05),
-      fixSynteny(false), syntenyUnlistedNA(false), seed(123),
+      fixSynteny(false), sigmaWMin(0.0), syntenyUnlistedNA(false), seed(123),
       randomSpeciesRoot(false), optVerbose(false) {
   if (argc == 1) {
     printHelp();
@@ -131,6 +131,8 @@ AleArguments::AleArguments(int iargc, char **iargv)
       }
     } else if (arg == "--fix-synteny") {
       fixSynteny = true;
+    } else if (arg == "--synteny-min-sigmaW") {
+      sigmaWMin = atof(argv[++i]);
     } else if (arg == "--synteny-unlisted-na") {
       syntenyUnlistedNA = true;
     } else if (arg == "--d") {
@@ -452,6 +454,11 @@ void AleArguments::printHelp() const {
   Logger::info << "\t--synteny-params <sigmaW,sigmaN> (starting P(collinear) "
                << "for WGD-derived / other pairs; default 0.5,0.05)" << std::endl;
   Logger::info << "\t--fix-synteny (do not optimize sigmaW, sigmaN)" << std::endl;
+  Logger::info << "\t--synteny-min-sigmaW <x> (fit sigmaW in [x,1): a declared "
+               << "WGD must leave at least this fraction of its surviving "
+               << "ohnolog pairs collinear; use it to make the WGD-vs-null "
+               << "test discriminate WGD from SSD bursts; see SYNTENY.md)"
+               << std::endl;
   Logger::info << "\t--synteny-unlisted-na (unlisted same-genome pairs are NA "
                << "instead of y=0)" << std::endl;
 
