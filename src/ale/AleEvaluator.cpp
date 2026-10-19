@@ -1,3 +1,4 @@
+#include <cstdlib>
 #include <functional>
 #include "AleOptimizer.hpp"
 
@@ -128,6 +129,9 @@ AleEvaluator::AleEvaluator(
 }
 
 void AleEvaluator::resetEvaluation(unsigned int i, bool highPrecision) {
+  // testing only: evaluate every family in ScaledValue precision
+  static const bool forceHigh = std::getenv("KALERAX_FORCE_HIGH_PRECISION");
+  highPrecision = highPrecision || forceHigh;
   auto famIndex = _geneTrees.getTrees()[i].familyIndex;
   _evaluations[i] =
       createModel(_speciesTree, _families[famIndex], _info, _mixtureAlpha,

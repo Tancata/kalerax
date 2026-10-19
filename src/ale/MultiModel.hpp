@@ -32,7 +32,19 @@ template <class REAL> struct ReconciliationCell {
  */
 // multiply a CLV term by 2^(-256*s) (synteny split-weight scaler, see
 // MultiModelInterface::_synNScale); exact for ScaledValue, plain for double
+//
+// ScaledValue::scale() renormalises by a single 2^256 step and ScaledValue
+// addition keeps only the operand with the smaller scaler, which is correct
+// only for normalised mantissas in [2^-256, 1]. A synteny-weighted term (CLV *
+// CLV * rate * weight, weight down to e^-177) can sit several steps below that
+// after the single scale() at the call site; left unnormalised it would win
+// additions against genuinely larger terms and silently drop them. So first
+// normalise fully (extra scale() calls are no-ops on normalised values), then
+// apply the 2^-256 factors one step at a time.
 template <class REAL> inline void applySynScale(REAL &t, int s) {
+  for (int i = 0; i < 4; ++i) {
+    scale(t);
+  }
   for (int i = 0; i < s; ++i) {
     t *= JS_SCALE_THRESHOLD;
     scale(t);
@@ -322,21 +334,21 @@ inline void MultiModelInterface::setSyntenyParams(double sigmaW,
   _synWScale.assign(_synN1.size(), {});
   bool anyScaled = false;
   // split a log-weight lw <= 0 into exp(lw + s*L) * 2^(-256*s), L = 256 ln 2
-  // threshold below which a log-weight is carried with an explicit scaler;
-  // KALERAX_SYN_SCALE_THRESHOLD overrides it (testing only: a value close to 0
-  // forces the scaled path on almost every split; results must not change)
+  // threshold below which a log-weight is carried with an explicit scaler
+  // (a weight below ~1e-230 times a ScaledValue product would underflow in
+  // the double mantissa); KALERAX_SYN_SCALE_THRESHOLD overrides it (testing
+  // only: results must not depend on it)
   static const double thr = [] {
     const char *v = std::getenv("KALERAX_SYN_SCALE_THRESHOLD");
-    return v ? std::atof(v) : -600.0;
+    return v ? std::atof(v) : -150.0;
   }();
   auto splitLog = [&anyScaled](double lw, int &s) {
     const double L = 256.0 * std::log(2.0);
     s = 0;
     if (lw < thr) {
-      s = static_cast<int>(std::ceil((-lw - std::min(300.0, -thr / 2)) / L));
-      if (s < 1) {
-        s = 1;
-      }
+      // largest s with lw + s*L <= 0: mantissa in (e^-L, 1] (a mantissa
+      // above 1 could not be renormalised downwards by scale())
+      s = static_cast<int>(std::floor(-lw / L));
       anyScaled = true;
     }
     return std::exp(lw + s * L);

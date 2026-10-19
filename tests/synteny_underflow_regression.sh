@@ -14,6 +14,11 @@
 #     default to y=0)
 #  3. WGD declared: finite lnL, identical when the scaled path is forced on
 #     every split (KALERAX_SYN_SCALE_THRESHOLD=-1e-9)
+#  4. a large random family (184 genes, 30 trees, ~5% collinear pairs, UNIFORM
+#     rooting, DTL; high-precision mode with competing CCP splits): lnL does
+#     not depend on the scaling threshold. Before ScaledValue terms were fully
+#     renormalised, unnormalised synteny-weighted terms won additions against
+#     larger terms; kalerax 97ec8fe lost 3-7 log units here.
 # usage: synteny_underflow_regression.sh [path/to/kalerax]
 set -euo pipefail
 BIN="${1:-$(dirname "$0")/../build/bin/kalerax}"
@@ -74,4 +79,46 @@ import sys, math
 a, b = map(float, sys.argv[1:3]); print(f"  WGD: lnL={a:.6f} forced-scaling lnL={b:.6f}")
 sys.exit(0 if math.isfinite(a) and abs(a - b) < 1e-6 * abs(a) else 1)
 E
+# 4. threshold invariance on a large random family
+r=$d/rnd; mkdir -p $r/g $r/m $r/syn
+python3 - $r <<'E'
+import sys, random
+d = sys.argv[1]; random.seed(3)
+cnt = {"OG": 6, "A1": 8, "A2": 10, "B1": 120, "B2": 40}
+genes = [f"{s}_{i}" for s, n in cnt.items() for i in range(n)]
+def rt():
+    nodes = genes[:]
+    while len(nodes) > 1:
+        i = random.randrange(len(nodes))
+        j = min(len(nodes) - 1, max(0, i + random.choice([-2, -1, 1, 2])))
+        if i == j: continue
+        a, b = nodes[i], nodes[j]; k = min(i, j)
+        nodes = [x for t, x in enumerate(nodes) if t not in (i, j)]
+        nodes.insert(k, f"({a},{b})")
+    return nodes[0]
+open(f"{d}/g/big.nw", "w").write("".join(rt() + ";\n" for _ in range(30)))
+open(f"{d}/m/big.link", "w").write("".join(f"{g}\t{g.split('_')[0]}\n" for g in genes))
+L = []
+for s, n in cnt.items():
+    for i in range(n):
+        for j in range(i + 1, n):
+            L.append(f"{s}_{i} {s}_{j} {1 if random.random() < 0.05 else 0}\n")
+open(f"{d}/syn/big.syn", "w").write("".join(L))
+open(f"{d}/families.txt", "w").write(
+    f"[FAMILIES]\n- big\ngene_tree = {d}/g/big.nw\nmapping = {d}/m/big.link\n")
+E
+R=(-f $r/families.txt -s $d/sp.nw --gene-tree-rooting UNIFORM --species-tree-search SKIP
+   --seed 1 --summary-only --gene-tree-samples 0 --rec-model UndatedDTL --fix-rates
+   --synteny-dir $r/syn --synteny-params 0.8,0.0227 --fix-synteny --wgd B1,B2:0.5)
+"$BIN" "${R[@]}" -p $r/def > $r/def.log 2>&1 || fail "random family, default threshold"
+for t in -1e-9 -50; do
+  KALERAX_SYN_SCALE_THRESHOLD=$t "$BIN" "${R[@]}" -p $r/t$t > $r/t$t.log 2>&1 \
+    || fail "random family, threshold $t"
+  python3 - $(lnl $r/def) $(lnl $r/t$t) $t <<'E' || fail "lnL depends on the scaling threshold"
+import sys, math
+a, b = map(float, sys.argv[1:3]); print(f"  random family: lnL default={a:.4f} threshold {sys.argv[3]}={b:.4f}")
+sys.exit(0 if math.isfinite(a) and abs(a - b) < 1e-6 * abs(a) else 1)
+E
+done
+echo "  PASS: lnL independent of the scaling threshold"
 echo "PASS: synteny weights below the double range are exact"

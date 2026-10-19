@@ -43,13 +43,15 @@ Weights can be far below the double range: a split carrying hundreds of
 collinear pairs that must be explained by a non-WGD event (e.g. ohnologs from an
 older, undeclared WGD) has log-weight ≈ n₁·log(sigma_N/sigma_W), or ≈
 n₀·log((1-sigma_W)/(1-sigma_N)) for many non-collinear pairs at a WGD split. A
-log-weight below −600 is stored as an in-range mantissa times 2^(−256·s) and
-the integer s is applied to the CLV term; the family then underflows in double
-precision and is re-evaluated exactly in ScaledValue precision (before this,
-such families failed with `ll=-inf`).
-Because LORe resolution reuses the doubling bracket, a LORe-resolved ohnolog
-pair automatically receives the WGD emission, while two parallel SSDs receive
-the non-WGD emission.
+log-weight below −150 is stored as a mantissa in (e^−177, 1] times 2^(−256·s);
+the integer s is applied to the CLV term, which is first fully renormalised
+(ScaledValue::scale() moves one 2^256 step, and ScaledValue addition keeps only
+the operand with the smaller scaler, so an unnormalised small term would
+otherwise displace a larger one). Such families underflow in double precision
+and are re-evaluated exactly in ScaledValue precision. Before kalerax 97ec8fe
+these families failed with `ll=-inf`; up to and including 97ec8fe they could
+also silently lose probability mass (several log units per large family), so
+synteny fits from those builds on data with large families should be re-run.
 
 `sigma_W` and `sigma_N` are two global parameters, estimated by maximum
 likelihood together with the WGD retention(s) q (coarse grid + golden-section,
@@ -163,7 +165,9 @@ burst was then still called a WGD (2ΔlnL of several hundred per 2000 families).
   same-genome collinear pairs across a root duplication (log-weight ≈ −942):
   fails with scaling disabled (old behaviour), gives the exact null synteny
   term 320·log sigma_N + 280·log(1−sigma_N), and gives a finite WGD likelihood
-  that is unchanged when the scaled path is forced on every split.
+  that is unchanged when the scaled path is forced on every split; on a large
+  random family (184 genes, 30 trees, DTL) the likelihood does not depend on
+  the scaling threshold (97ec8fe lost 3 log units there).
 
 - `tests/synteny_bound_regression.py <kalerax> <workdir> [families]`: simulated
   SSD burst — the bound removes most of the spurious WGD signal that a free
