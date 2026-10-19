@@ -39,6 +39,14 @@ splits, and is integrated **exactly** inside the existing amalgamated DP:
   log ∏_pairs m(y) is added to the family log-likelihood.
 
 All weights are ≤ 1, so every conditional likelihood stays a (sub-)probability.
+Weights can be far below the double range: a split carrying hundreds of
+collinear pairs that must be explained by a non-WGD event (e.g. ohnologs from an
+older, undeclared WGD) has log-weight ≈ n₁·log(sigma_N/sigma_W), or ≈
+n₀·log((1-sigma_W)/(1-sigma_N)) for many non-collinear pairs at a WGD split. A
+log-weight below −600 is stored as an in-range mantissa times 2^(−256·s) and
+the integer s is applied to the CLV term; the family then underflows in double
+precision and is re-evaluated exactly in ScaledValue precision (before this,
+such families failed with `ll=-inf`).
 Because LORe resolution reuses the doubling bracket, a LORe-resolved ohnolog
 pair automatically receives the WGD emission, while two parallel SSDs receive
 the non-WGD emission.
@@ -150,6 +158,12 @@ burst was then still called a WGD (2ΔlnL of several hundred per 2000 families).
    (`--fix-synteny --synteny-params W,N`).
 
 ## Validation (bundled tests)
+
+- `tests/synteny_underflow_regression.sh [kalerax]`: a family with 320
+  same-genome collinear pairs across a root duplication (log-weight ≈ −942):
+  fails with scaling disabled (old behaviour), gives the exact null synteny
+  term 320·log sigma_N + 280·log(1−sigma_N), and gives a finite WGD likelihood
+  that is unchanged when the scaled path is forced on every split.
 
 - `tests/synteny_bound_regression.py <kalerax> <workdir> [families]`: simulated
   SSD burst — the bound removes most of the spurious WGD signal that a free

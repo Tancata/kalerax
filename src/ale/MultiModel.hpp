@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdlib>
 
 #include <IO/HighwayCandidateParser.hpp>
 #include <ccp/ConditionalClades.hpp>
@@ -29,6 +30,15 @@ template <class REAL> struct ReconciliationCell {
  *  gene tree distributions (represented by conditional clade
  *  probabilities)
  */
+// multiply a CLV term by 2^(-256*s) (synteny split-weight scaler, see
+// MultiModelInterface::_synNScale); exact for ScaledValue, plain for double
+template <class REAL> inline void applySynScale(REAL &t, int s) {
+  for (int i = 0; i < s; ++i) {
+    t *= JS_SCALE_THRESHOLD;
+    scale(t);
+  }
+}
+
 class MultiModelInterface : public BaseReconciliationModel {
 public:
   MultiModelInterface(PLLRootedTree &speciesTree,
@@ -144,6 +154,26 @@ protected:
   double synWgdFreq(CID cid, size_t k, double freq) const {
     return _synActive ? _synWFreq[cid][k] : freq;
   }
+  // Synteny split weights can be far below the double range (a split carrying
+  // hundreds of collinear pairs that must be explained by a non-WGD event has
+  // log-weight ~ n1*log(sigmaN/sigmaW)). Such weights are stored as an in-range
+  // mantissa (in the split frequency / _synWFreq) times 2^(-256*s); s is the
+  // integer stored here and applied to the CLV term with applySynScale, which
+  // is exact for ScaledValue. In double precision the term underflows to 0 as
+  // before, which triggers the high-precision rebuild of the family.
+  std::vector<std::vector<int>> _synNScale; // per cid, per split (non-WGD)
+  std::vector<std::vector<int>> _synWScale; // per cid, per split (WGD)
+  int synScaleN(CID cid, size_t k) const {
+    return _synNScale.empty() ? 0 : _synNScale[cid][k];
+  }
+  int synScaleN(CID cid, const CladeSplit &cs) const {
+    return _synNScale.empty()
+               ? 0
+               : _synNScale[cid][&cs - _ccp.getCladeSplits(cid).data()];
+  }
+  int synScaleW(CID cid, size_t k) const {
+    return _synWScale.empty() ? 0 : _synWScale[cid][k];
+  }
   void restoreSyntenyFrequencies() {
     for (size_t cid = 0; cid < _synOrigFreq.size(); ++cid) {
       auto &splits = _ccp.getCladeSplitsMutable(cid);
@@ -151,6 +181,8 @@ protected:
         splits[k].frequency = _synOrigFreq[cid][k];
       }
     }
+    _synNScale.clear();
+    _synWScale.clear();
   }
 };
 
@@ -286,16 +318,47 @@ inline void MultiModelInterface::setSyntenyParams(double sigmaW,
   const double lm1 = std::max(lw1, ln1), lm0 = std::max(lw0, ln0);
   _synLogConst = _synTot1 * lm1 + _synTot0 * lm0;
   _synWFreq.assign(_synN1.size(), {});
+  _synNScale.assign(_synN1.size(), {});
+  _synWScale.assign(_synN1.size(), {});
+  bool anyScaled = false;
+  // split a log-weight lw <= 0 into exp(lw + s*L) * 2^(-256*s), L = 256 ln 2
+  // threshold below which a log-weight is carried with an explicit scaler;
+  // KALERAX_SYN_SCALE_THRESHOLD overrides it (testing only: a value close to 0
+  // forces the scaled path on almost every split; results must not change)
+  static const double thr = [] {
+    const char *v = std::getenv("KALERAX_SYN_SCALE_THRESHOLD");
+    return v ? std::atof(v) : -600.0;
+  }();
+  auto splitLog = [&anyScaled](double lw, int &s) {
+    const double L = 256.0 * std::log(2.0);
+    s = 0;
+    if (lw < thr) {
+      s = static_cast<int>(std::ceil((-lw - std::min(300.0, -thr / 2)) / L));
+      if (s < 1) {
+        s = 1;
+      }
+      anyScaled = true;
+    }
+    return std::exp(lw + s * L);
+  };
   for (size_t cid = 0; cid < _synN1.size(); ++cid) {
     auto &splits = _ccp.getCladeSplitsMutable(cid);
     _synWFreq[cid].resize(splits.size());
+    _synNScale[cid].resize(splits.size());
+    _synWScale[cid].resize(splits.size());
     for (size_t k = 0; k < splits.size(); ++k) {
       const double n1 = _synN1[cid][k], n0 = _synN0[cid][k];
       const double lwN = n1 * (ln1 - lm1) + n0 * (ln0 - lm0); // <= 0
       const double lwW = n1 * (lw1 - lm1) + n0 * (lw0 - lm0); // <= 0
-      splits[k].frequency = _synOrigFreq[cid][k] * std::exp(lwN);
-      _synWFreq[cid][k] = _synOrigFreq[cid][k] * std::exp(lwW);
+      splits[k].frequency =
+          _synOrigFreq[cid][k] * splitLog(lwN, _synNScale[cid][k]);
+      _synWFreq[cid][k] =
+          _synOrigFreq[cid][k] * splitLog(lwW, _synWScale[cid][k]);
     }
+  }
+  if (!anyScaled) {
+    _synNScale.clear();
+    _synWScale.clear();
   }
   this->invalidateAllSpeciesNodes();
   this->resetCache();

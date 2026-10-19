@@ -150,6 +150,7 @@ private:
       REAL t = _dlclvs[cs.left][ec] * _dlclvs[cs.right][ec] *
                this->synWgdFreq(cid, k, cs.frequency);
       scale(t);
+      applySynScale(t, this->synScaleW(cid, k));
       split += t;
     }
     REAL out = _uE[ec] * _dlclvs[cid][ec] * 2.0 + split;
@@ -295,6 +296,7 @@ template <class REAL> void UndatedDLMultiModel<REAL>::updateCLV(CID cid) {
                       _uclvs[cs.right][fc] * _uclvs[cs.left][gc]) *
                      (_PS[ec] / uDen(ec) * cs.frequency);
             scale(t);
+            applySynScale(t, this->synScaleN(cid, cs));
             rest += t;
           }
           // speciation + unresolved loss of one daughter (SL acting on U)
@@ -571,10 +573,12 @@ bool UndatedDLMultiModel<REAL>::computeProbability(
     auto cidLeft = cladeSplit.left;
     auto cidRight = cladeSplit.right;
     auto freq = cladeSplit.frequency;
+    const int synS = this->synScaleN(cid, cladeSplit);
     // - S event on an internal species branch
     if (!isSpeciesLeaf) {
       temp = _dlclvsTop[cidLeft][fc] * _dlclvsTop[cidRight][gc] * (_PS[ec] * freq);
       scale(temp);
+      applySynScale(temp, synS);
       proba += temp;
       if (recCell && proba > maxProba) {
         recCell->event.type = ReconciliationEventType::EVENT_S;
@@ -586,6 +590,7 @@ bool UndatedDLMultiModel<REAL>::computeProbability(
       }
       temp = _dlclvsTop[cidRight][fc] * _dlclvsTop[cidLeft][gc] * (_PS[ec] * freq);
       scale(temp);
+      applySynScale(temp, synS);
       proba += temp;
       if (recCell && proba > maxProba) {
         recCell->event.type = ReconciliationEventType::EVENT_S;
@@ -599,6 +604,7 @@ bool UndatedDLMultiModel<REAL>::computeProbability(
     // - D event
     temp = _dlclvs[cidLeft][ec] * _dlclvs[cidRight][ec] * (_PD[ec] * freq);
     scale(temp);
+    applySynScale(temp, synS);
     proba += temp;
     if (recCell && proba > maxProba) {
       recCell->event.type = ReconciliationEventType::EVENT_D;
@@ -854,6 +860,7 @@ bool UndatedDLMultiModel<REAL>::sampleUEventImpl(CID cid, corax_rnode_t *sp,
       REAL s1 = _uclvs[cs.left][fc] * _uclvs[cs.right][gc] * w0;
       REAL s2 = _uclvs[cs.right][fc] * _uclvs[cs.left][gc] * w0;
       scale(s1);
+      applySynScale(s1, this->synScaleN(cid, cs));
       scale(s2);
       total = total + s1 + s2;
     }
@@ -884,6 +891,7 @@ bool UndatedDLMultiModel<REAL>::sampleUEventImpl(CID cid, corax_rnode_t *sp,
       REAL t = _dlclvs[cs.left][ec] * _dlclvs[cs.right][ec] *
                this->synWgdFreq(cid, k, cs.frequency);
       scale(t);
+      applySynScale(t, this->synScaleW(cid, k));
       dAcc = dAcc + t;
       if (dAcc > dSample) {
         ev.type = UEventSample::RESOLVE_SPLIT;
@@ -905,6 +913,7 @@ bool UndatedDLMultiModel<REAL>::sampleUEventImpl(CID cid, corax_rnode_t *sp,
     double w0 = (1.0 - r) * psU * cs.frequency;
     REAL s1 = _uclvs[cs.left][fc] * _uclvs[cs.right][gc] * w0;
     scale(s1);
+    applySynScale(s1, this->synScaleN(cid, cs));
     acc = acc + s1;
     if (acc > toSample) {
       ev.type = UEventSample::SPECIATE;
@@ -917,6 +926,7 @@ bool UndatedDLMultiModel<REAL>::sampleUEventImpl(CID cid, corax_rnode_t *sp,
     }
     REAL s2 = _uclvs[cs.right][fc] * _uclvs[cs.left][gc] * w0;
     scale(s2);
+    applySynScale(s2, this->synScaleN(cid, cs));
     acc = acc + s2;
     if (acc > toSample) {
       ev.type = UEventSample::SPECIATE;
