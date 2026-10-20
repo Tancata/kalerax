@@ -229,8 +229,9 @@ def analyse(df, r, fam2block=None, order=None, rhat=None, n_perm=1000, seed=1):
         inseg = set(np.concatenate(segs)) if segs else set()
         rest = [i for i in range(len(fams)) if i not in inseg]
         lh, pih, rho = fit_hmm(LL, segs, pii)
-        # families without coordinates contribute their independent-mixture term
-        lrest = float(logsumexp(np.log(np.maximum(pih, 1e-300)) + LL[rest], axis=1).sum()) if rest else 0.0
+        # families without coordinates contribute an independent mixture with their
+        # own class weights (as for unblocked families in the block model)
+        lrest = float(em_mixture(LL[rest])[0]) if rest else 0.0
         li_seg = float(logsumexp(np.log(np.maximum(pii, 1e-300)) + LL[list(inseg)], axis=1).sum())
         res["hmm"] = {"lnL_ordered": float(lh), "lnL_total": float(lh + lrest), "pi": pih.tolist(),
                       "rho": float(rho), "mean_run_length": float(1 / rho),
