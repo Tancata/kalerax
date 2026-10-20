@@ -757,6 +757,16 @@ void run(AleArguments &args) {
   // declare any command-line WGDs on the (now constructed) species tree, or
   // restore those already recovered from the checkpoint on a resumed run
   declareWGDs(args, speciesTreeOptimizer, checkpointDetected);
+  speciesTreeOptimizer.getEvaluator().setFixedResolution(args.loreFixedR);
+  speciesTreeOptimizer.getEvaluator().setFixWGDRetentions(args.fixWgdQ);
+  if (args.loreFixedR >= 0.0) {
+    Logger::timed << "LORe resolution r held fixed at " << args.loreFixedR
+                  << " (--lore-fixed-r)" << std::endl;
+  }
+  if (args.fixWgdQ) {
+    Logger::timed << "WGD retention(s) held fixed at the declared q0 "
+                  << "(--fix-wgd-q)" << std::endl;
+  }
   // synteny (Layer 1) pair observations, if requested
   if (!args.syntenyDir.empty()) {
     speciesTreeOptimizer.getEvaluator().setSigmaWMin(args.sigmaWMin);

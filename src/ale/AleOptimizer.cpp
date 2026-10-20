@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <fstream>
 #include <memory>
 
 #include <IO/FileSystem.hpp>
@@ -292,6 +293,7 @@ void AleOptimizer::saveRatesAndLL() {
     }
     std::sort(familiesAndLLs.begin(), familiesAndLLs.end());
     std::ofstream llOs(perFamilyLikelihoodPath);
+    llOs.precision(12); // enough digits to difference per-family lnLs
     for (const auto &sf : familiesAndLLs) {
       llOs << sf.familyName << " " << sf.score << std::endl;
     }
@@ -353,6 +355,34 @@ void AleOptimizer::saveRatesAndLL() {
       ratesOs << std::endl;
     }
     ratesOs.close();
+  }
+  // full-precision fitted parameters (global rates, WGD q/r, synteny sigmas),
+  // so a fit can be re-evaluated exactly with --fix-rates --fix-wgd-q
+  // --lore-fixed-r --fix-synteny (the files above use 6 significant digits)
+  if (ParallelContext::getRank() == 0) {
+    std::ofstream fp(FileSystem::joinPaths(ratesDir, "wgd_parameters.txt"));
+    fp.precision(17);
+    fp << "#kind\tlabel\tnode_index\tvalue1\tvalue2" << std::endl;
+    if (!_info.perFamilyRates && getModelParameters().size()) {
+      const auto &parameters = getModelParameters()[0];
+      auto root = getSpeciesTree().getTree().getRoot();
+      for (unsigned int rate = 0; rate < parameterNames.size(); ++rate) {
+        fp << "rate\t" << parameterNames[rate] << "\t" << root->node_index
+           << "\t" << parameters.getParameter(root->node_index, rate)
+           << "\tNA" << std::endl;
+      }
+    }
+    auto &stree = getSpeciesTree().getTree();
+    for (auto w : _evaluator->getWGDNodes()) {
+      auto *wnode = stree.getNode(w);
+      fp << "wgd\t" << (wnode->label ? wnode->label : "NA") << "\t" << w
+         << "\t" << _evaluator->getWGDRetention(w) << "\t"
+         << _evaluator->getWGDResolution(w) << std::endl;
+    }
+    if (_evaluator->hasSynteny()) {
+      fp << "synteny\tsigma\tNA\t" << _evaluator->getSigmaW() << "\t"
+         << _evaluator->getSigmaN() << std::endl;
+    }
   }
   // Logger::info << "save model rates to " << ratesDir << std::endl;
   ParallelContext::barrier();

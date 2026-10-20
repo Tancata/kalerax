@@ -232,3 +232,26 @@ re-declares them from the command-line starting values (q0, r=0.9) on a
 resumed run. Resuming a `--wgd … --lore` run after the retention/resolution
 optimisation has completed now reconciles with the *fitted* q/r, matching an
 uninterrupted run bit-for-bit (`tests/checkpoint_lore_regression.sh`).
+
+## Fixed-parameter evaluation (`--lore-fixed-r`, `--fix-wgd-q`)
+
+- `--lore-fixed-r <r>` (with `--lore` or `--lore-wgd`) holds the resolution
+  probability at `r` in [0,1] on every resolvable WGD. Non-target and terminal
+  WGDs stay at r = 1. The AORe/LORe model choice and revert are skipped. q is
+  still fitted unless `--fix-wgd-q` is given.
+- `--fix-wgd-q` holds every WGD retention at its declared `--wgd LABEL:q0`.
+  `--fix-rates` alone does not fix q.
+- Every run writes `model_parameters/wgd_parameters.txt` at full precision: the
+  global rates, q and r per WGD, and σ_W and σ_N. `per_fam_likelihoods.txt` is
+  now written with 12 significant digits.
+- To evaluate per-family likelihoods L_f(r) at fixed parameters, for example on
+  an r grid for block-level models:
+
+      --fix-rates --d D --l L --t T --wgd W:q --fix-wgd-q \
+      --lore --lore-fixed-r r --fix-synteny --synteny-params sW,sN \
+      --skip-thorough-rates
+
+  Re-evaluating at the free-fit values reproduces the free-fit lnL exactly, and
+  `--lore-fixed-r 1` equals the AORe model exactly
+  (`tests/lore_fixed_r_regression.py`).
+- Invalid command-line arguments now exit with status 1 (previously 0).

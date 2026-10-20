@@ -871,6 +871,66 @@ double AleEvaluator::optimizeModelRates(bool thorough) {
       return bestX;
     };
 
+    const bool rFixed = _optimizeResolution && _fixedR >= 0.0;
+    if (rFixed || _fixWgdQ) {
+      // Constrained WGD pass (--lore-fixed-r and/or --fix-wgd-q): no AORe/LORe
+      // model choice, no revert. r is set to the fixed value (resolvable WGDs;
+      // others pinned to 1), or kept free and golden-refined with q held; q is
+      // held at its declared value, or fitted with r held.
+      const unsigned int n = _wgdNodes.size();
+      std::vector<double> rVec(n, 1.0);
+      if (_optimizeResolution) {
+        for (unsigned int j = 0; j < n; ++j) {
+          if (_wgdResolvable[j]) {
+            double cur = (j < _wgdResolution.size()) ? _wgdResolution[j] : 0.9;
+            rVec[j] = rFixed ? _fixedR : std::min(cur, 0.9);
+          }
+        }
+        setWGDResolutions(rVec);
+      } else {
+        setResolutionProb(1.0);
+      }
+      if (!_fixWgdQ) {
+        // q only (the optimizer leaves the per-event r state untouched)
+        Parameters startQOnly(startQ());
+        WGDRetentionOptimizer qFun(*this, _wgdNodes, false, {});
+        ParallelContext::barrier();
+        auto bestQ = DTLOptimizer::optimizeParameters(qFun, startQOnly, settings);
+        qFun.setParameters(bestQ);
+        if (thorough) {
+          for (unsigned int j = 0; j < n; ++j) {
+            auto node = _wgdNodes[j];
+            goldenRefine(
+                [&](double q) { setWGD(node, q); return computeLikelihood(); },
+                0.0, 0.999, 16);
+          }
+        }
+      }
+      if (_optimizeResolution && !rFixed) {
+        // r only, q held (golden-section on each resolvable WGD's r)
+        for (unsigned int j = 0; j < n; ++j) {
+          if (!_wgdResolvable[j]) {
+            continue;
+          }
+          goldenRefine(
+              [&](double r) {
+                rVec[j] = r;
+                setWGDResolutions(rVec);
+                return computeLikelihood();
+              },
+              0.0, 0.999, thorough ? 24 : 16);
+        }
+      }
+      ll = computeLikelihood();
+      Logger::timed << "[Species search]   After constrained WGD pass ("
+                    << (_fixWgdQ ? "q fixed" : "q fitted") << ", "
+                    << (!_optimizeResolution ? "AORe"
+                                             : (rFixed ? "r fixed" : "r fitted"))
+                    << "), ll=" << ll;
+      logQ();
+      logR();
+      Logger::info << std::endl;
+    } else {
     // (1) AORe optimum: WGD retentions only, with r = 1 (the nested null).
     setResolutionProb(1.0);
     Parameters startA(startQ());
@@ -976,6 +1036,7 @@ double AleEvaluator::optimizeModelRates(bool thorough) {
         Logger::info << std::endl;
       }
     }
+    } // end unconstrained WGD pass
   }
   // synteny emission parameters (Layer 1)
   if (_synLoaded && !_fixSynteny) {

@@ -103,6 +103,11 @@ public:
   unsigned int gammaCategories;
   RecOpt recOpt;
   bool fixRates;
+  // LORe: hold the per-event resolution r fixed at this value on every
+  // resolvable WGD (--lore-fixed-r; <0 = fit r as usual)
+  double loreFixedR;
+  // hold every WGD retention q fixed at its --wgd LABEL:q0 value
+  bool fixWgdQ;
   bool skipThoroughRates;
 
   // highways

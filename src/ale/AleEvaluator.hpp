@@ -194,6 +194,16 @@ public:
   bool optimizesResolution() const { return _optimizeResolution; }
 
   /**
+   *  Hold the LORe resolution r fixed at r (>= 0) on every resolvable WGD
+   *  instead of fitting it (--lore-fixed-r); r < 0 restores fitting. Only
+   *  meaningful with LORe enabled. Hold every WGD retention q at its current
+   *  (declared q0) value (--fix-wgd-q).
+   */
+  void setFixedResolution(double r) { _fixedR = r; }
+  double getFixedResolution() const { return _fixedR; }
+  void setFixWGDRetentions(bool fix) { _fixWgdQ = fix; }
+
+  /**
    *  Restrict LORe to a specific declared WGD (by node index): only the
    *  registered targets get a free resolution r; every other WGD is pinned to
    *  AORe (r=1). When no target is registered, every internal-branch WGD is
@@ -376,6 +386,8 @@ private:
   std::vector<std::shared_ptr<SyntenyInput>> _synInputs;
   bool _synLoaded = false;
   bool _fixSynteny = false;
+  double _fixedR = -1.0;  // --lore-fixed-r (< 0: r is fitted)
+  bool _fixWgdQ = false;  // --fix-wgd-q
   double _sigmaW = 0.5;
   double _sigmaWMin = 0.0;
   double _sigmaN = 0.05;

@@ -55,7 +55,7 @@ AleArguments::AleArguments(int iargc, char **iargv)
       speciesSearchStrategy(SpeciesSearchStrategy::SKIP),
       inferSpeciationOrders(false),
       modelParametrization(ModelParametrization::GLOBAL), gammaCategories(1),
-      recOpt(RecOpt::LBFGSB), fixRates(false), skipThoroughRates(false),
+      recOpt(RecOpt::LBFGSB), fixRates(false), loreFixedR(-1.0), fixWgdQ(false), skipThoroughRates(false),
       highways(false), highwayCandidatesStep1(DEFAULT_HIGHWAY_CANDIDATES_1),
       highwayCandidatesStep2(DEFAULT_HIGHWAY_CANDIDATES_2),
       skipFamilyFiltering(false),
@@ -112,6 +112,10 @@ AleArguments::AleArguments(int iargc, char **iargv)
       wgds.push_back(parseWGDDeclaration(std::string(argv[++i])));
     } else if (arg == "--lore") {
       lore = true;
+    } else if (arg == "--lore-fixed-r") {
+      loreFixedR = atof(argv[++i]);
+    } else if (arg == "--fix-wgd-q") {
+      fixWgdQ = true;
     } else if (arg == "--lore-wgd") {
       loreWgds.push_back(parseWGDDeclaration(std::string(argv[++i])));
     } else if (arg == "--summary-only") {
@@ -499,6 +503,15 @@ void AleArguments::printHelp() const {
                << "mutually disjoint. Implies LORe; mutually exclusive with "
                << "--lore)"
                << std::endl;
+  Logger::info << "\t--lore-fixed-r <r> (hold the LORe resolution r fixed at r "
+               << "in [0,1] on every resolvable WGD instead of fitting it; "
+               << "r=1 is AORe. Requires --lore or --lore-wgd)"
+               << std::endl;
+  Logger::info << "\t--fix-wgd-q (hold every WGD retention q fixed at its "
+               << "--wgd LABEL:q0 value instead of fitting it; with --fix-rates "
+               << "--fix-synteny --lore-fixed-r this evaluates the likelihood at "
+               << "fully fixed parameters)"
+               << std::endl;
 
   Logger::info << "Search strategy options:" << std::endl;
   Logger::info << "\t--species-tree-search {HYBRID, REROOT, SKIP}" << std::endl;
@@ -610,6 +623,22 @@ void AleArguments::checkValid() const {
                    << "or UndatedDTL" << std::endl;
     }
   }
+  if (loreFixedR != -1.0) { // set on the command line
+    if (!lore && loreWgds.empty()) {
+      ok = false;
+      Logger::info << "\nError: --lore-fixed-r requires --lore or --lore-wgd"
+                   << std::endl;
+    }
+    if (loreFixedR < 0.0 || loreFixedR > 1.0) {
+      ok = false;
+      Logger::info << "\nError: --lore-fixed-r must lie in [0,1]" << std::endl;
+    }
+  }
+  if (fixWgdQ && wgds.empty()) {
+    ok = false;
+    Logger::info << "\nError: --fix-wgd-q requires at least one --wgd"
+                 << std::endl;
+  }
   if (d <= 0.0 || l <= 0.0 || t <= 0.0) {
     ok = false;
     Logger::info << "\nError: --d and --l and --t can only take "
@@ -699,9 +728,9 @@ void AleArguments::checkValid() const {
     Logger::info << "\nError: --ccp-sample-frequency can only take "
                  << "values >= 1" << std::endl;
   }
-  // final
+  // final (nonzero exit so that scripted runs notice invalid arguments)
   if (!ok) {
     Logger::info << std::endl;
-    ParallelContext::abort(0);
+    ParallelContext::abort(1);
   }
 }
