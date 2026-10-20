@@ -182,28 +182,41 @@ def analyse(df, r, fam2block=None, order=None, rhat=None, n_perm=1000, seed=1):
     blk_tab = None
     if fam2block is not None:
         blocks, names = block_index(fams, fam2block)
-        nmulti = sum(len(b) > 1 for b in blocks)
-        lb, pib, postb = fit_block(LL, blocks)
-        res["block"] = {"lnL": float(lb), "pi": pib.tolist(), "n_blocks": nmulti,
-                        "n_blocked_families": int(sum(len(b) for b in blocks if len(b) > 1)),
-                        "n_unblocked_families": int(sum(len(b) == 1 for b in blocks)),
-                        "gain_vs_indep": float(lb - li)}
+        multi = [(b, nm) for b, nm in zip(blocks, names) if len(b) > 1]
+        mb = [b for b, _ in multi]
+        inb = np.concatenate(mb) if mb else np.array([], int)
+        out = np.setdiff1d(np.arange(len(fams)), inb)
+        # Blocked and unblocked families are different populations (block membership
+        # is defined from the same synteny data that enters L_f), so each subset
+        # gets its own class weights. The coupling test compares block-shared vs
+        # independent mixtures on the blocked families only; the unblocked
+        # families contribute the same independent-mixture term to both models.
+        lu, piu, postu = em_mixture(LL[out]) if len(out) else (0.0, np.zeros(len(r)), None)
+        lib, pib_i, postib = em_mixture(LL[inb])
+        lb, pib, postb = em_mixture(block_sums(LL, mb))
+        res["unblocked"] = {"n_families": int(len(out)), "indep_lnL": float(lu), "pi": piu.tolist()}
+        res["block"] = {"n_blocks": len(mb), "n_blocked_families": int(len(inb)),
+                        "indep_lnL_blocked": float(lib), "indep_pi_blocked": pib_i.tolist(),
+                        "block_lnL_blocked": float(lb), "pi": pib.tolist(),
+                        "lnL": float(lb + lu), "indep_split_lnL": float(lib + lu),
+                        "gain_vs_indep": float(lb - lib)}
         if n_perm:
-            perm = permutation_test(LL, blocks, n_perm, seed, pi0=pib)
+            perm = permutation_test(LL, mb, n_perm, seed, pi0=pib)
             res["block"]["perm"] = {"n": n_perm, "mean": float(perm.mean()), "sd": float(perm.std()),
                                     "max": float(perm.max()),
                                     "p": float((1 + np.sum(perm >= lb)) / (n_perm + 1)),
-                                    "gain_vs_perm_mean": float(lb - perm.mean())}
+                                    "gain_vs_perm_mean": float(lb - perm.mean()),
+                                    "z": float((lb - perm.mean()) / max(perm.std(), 1e-12))}
         rows = []
-        for b, nm, pb in zip(blocks, names, postb):
-            if nm is None:
-                continue
+        for (b, nm), pb in zip(multi, postb):
             rows.append(dict(block=nm, n_families=len(b), E_r=float(pb @ r),
                              MAP_r=float(r[np.argmax(pb)]), P_MAP=float(pb.max()),
+                             lnL_shared=float(logsumexp(np.log(np.maximum(pib, 1e-300)) + LL[b].sum(0))),
+                             lnL_indep=float(logsumexp(np.log(np.maximum(pib_i, 1e-300)) + LL[b], axis=1).sum()),
                              **{f"P_r{rc:g}": float(x) for rc, x in zip(r, pb)}))
         blk_tab = pd.DataFrame(rows)
         f2E = {}
-        for b, pb in zip(blocks, postb):
+        for (b, _), pb in zip(multi, postb):
             for i in b:
                 f2E[fams[i]] = float(pb @ r)
         fam_tab["E_r_block"] = fam_tab["family"].map(f2E)
