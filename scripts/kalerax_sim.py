@@ -257,6 +257,56 @@ def simulate_families(tree: SpeciesTree, p: Params, n_fam: int, seed: int,
     return out, stats
 
 
+def simulate_block_families(tree: SpeciesTree, D, L, T, wgd_edge, q, r_classes, weights,
+                            n_blocks, mean_block_size, seed, coupling=1.0, min_species=4,
+                            origin_strategy="UNIFORM", keep_nodes=True):
+    """Block-coupled LORe: families in the same syntenic block share one latent
+    resolution class. Each block b draws a class c_b ~ Categorical(weights) and
+    a size 1 + Poisson(mean_block_size - 1); every family in the block is then
+    simulated under the WGD (wgd_edge, q, r_classes[c_f]), with c_f = c_b with
+    probability `coupling` and an independent draw from `weights` otherwise
+    (coupling=0 is the no-block-structure null with the same marginal).
+    Families are drawn as in simulate_families (rejection on extinction and on
+    the >= min_species filter). Returns (families, stats); each family carries
+    'block', 'block_class' and 'r_class' (the class index it was simulated
+    under)."""
+    import sys
+    sys.setrecursionlimit(100000)
+    rng = np.random.default_rng(seed)
+    sims = [FamilySim(tree, Params(tree, D, L, T, wgds=[(wgd_edge, q, r)]), rng) for r in r_classes]
+    nodes = np.arange(tree.n) if origin_strategy == "UNIFORM" else np.array([tree.root])
+    w = np.asarray(weights, float) / np.sum(weights)
+    out, stats = [], dict(attempts=0, extinct=0, filtered=0, overflow=0)
+    for b in range(n_blocks):
+        cb = int(rng.choice(len(w), p=w))
+        size = 1 + int(rng.poisson(max(mean_block_size - 1.0, 0.0)))
+        for _ in range(size):
+            cf = cb if rng.random() < coupling else int(rng.choice(len(w), p=w))
+            sim = sims[cf]
+            while True:
+                stats["attempts"] += 1
+                o = int(nodes[rng.integers(len(nodes))])
+                try:
+                    root = sim.run(o)
+                except OverflowError:
+                    stats["overflow"] += 1
+                    continue
+                if root is None:
+                    stats["extinct"] += 1
+                    continue
+                nwk, mp = to_newick(root, [0])
+                nsp = len({s for _, s in mp})
+                if nsp < min_species:
+                    stats["filtered"] += 1
+                    continue
+                break
+            out.append(dict(newick=nwk, mapping=mp, origin=o, n_genes=len(mp), n_species=nsp,
+                            block=b, block_class=cb, r_class=cf,
+                            counts={k: v.copy() for k, v in sim.cnt.items()},
+                            **({"root": root} if keep_nodes else {})))
+    return out, stats
+
+
 def write_family_set(fams, outdir, prefix="fam"):
     """Write gene trees + mapping files + a kalerax families file. Gene trees
     for all families are written into ONE directory (2 files per family)."""
@@ -341,7 +391,7 @@ def synteny_lines(root, rng, sigma_w=0.7, sigma_n=0.03, na_frac=0.0, block=False
             counter[0] += 1
             return {v.leaf: [f"{v.leaf}_g{counter[0]}"]}
         a, b = rec(v.kids[0]), rec(v.kids[1])
-        for s in set(a) & set(b):
+        for s in sorted(set(a) & set(b)):  # sorted: set order is hash-seeded
             sig = sigma_w if v.event == "W" else sigma_n
             yb = int(rng.random() < sig)
             shared = rng.random() < block_frac
