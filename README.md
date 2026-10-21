@@ -2,6 +2,8 @@
 
 # kalerax — a WGD/LORe-focused fork of AleRax
 
+**How-to for every analysis (WGD test, placement, LORe, synteny, fixed-parameter evaluation, regional/block timing, simulation): see [ANALYSES.md](ANALYSES.md).**
+
 > **This is a fork of [AleRax](https://github.com/BenoitMorel/AleRax)** (the
 > binary is named `kalerax`, to keep it distinct from upstream AleRax). It adds
 > support for modelling **whole-genome duplications (WGD)** in AleRax's undated
