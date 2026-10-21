@@ -132,6 +132,28 @@ def hmm_forward(LL, segments, pi, rho):
     return tot
 
 
+def pad_segments(LL, segments):
+    """Pack segments (lists of family indices) into a padded [S, Lmax, C] array + mask."""
+    S, C = len(segments), LL.shape[1]
+    Lmax = max(len(g) for g in segments)
+    X = np.zeros((S, Lmax, C)); M = np.zeros((S, Lmax), bool)
+    for i, g in enumerate(segments):
+        X[i, :len(g)] = LL[g]; M[i, :len(g)] = True
+    return X, M
+
+
+def hmm_forward_padded(X, M, pi, rho):
+    """Same likelihood as hmm_forward, all segments advanced in parallel."""
+    lpi = np.log(np.maximum(pi, 1e-300))
+    l1r, lr = np.log1p(-rho), np.log(rho)
+    a = lpi + X[:, 0]
+    for t in range(1, X.shape[1]):
+        za = logsumexp(a, axis=1, keepdims=True)
+        new = np.logaddexp(l1r + a, lr + lpi + za) + X[:, t]
+        a = np.where(M[:, t, None], new, a)
+    return float(logsumexp(a, axis=1).sum())
+
+
 def hmm_posterior(LL, segments, pi, rho):
     """Per-family posterior class probabilities (forward-backward)."""
     lpi = np.log(np.maximum(pi, 1e-300))
@@ -153,12 +175,13 @@ def hmm_posterior(LL, segments, pi, rho):
 
 def fit_hmm(LL, segments, pi0):
     C = LL.shape[1]
+    X, M = pad_segments(LL, segments)
     def unpack(x):
         rho = 1.0 / (1.0 + np.exp(-x[0]))
         w = np.concatenate([[0.0], x[1:]]); pi = np.exp(w - logsumexp(w))
         return pi, rho
     x0 = np.concatenate([[np.log(0.1 / 0.9)], np.log(np.maximum(pi0[1:], 1e-6) / max(pi0[0], 1e-6))])
-    res = minimize(lambda x: -hmm_forward(LL, segments, *unpack(x)), x0, method="Nelder-Mead",
+    res = minimize(lambda x: -hmm_forward_padded(X, M, *unpack(x)), x0, method="Nelder-Mead",
                    options=dict(maxiter=4000, xatol=1e-5, fatol=1e-4))
     pi, rho = unpack(res.x)
     return -res.fun, pi, rho
@@ -232,7 +255,8 @@ def analyse(df, r, fam2block=None, order=None, rhat=None, n_perm=1000, seed=1):
         # families without coordinates contribute an independent mixture with their
         # own class weights (as for unblocked families in the block model)
         lrest = float(em_mixture(LL[rest])[0]) if rest else 0.0
-        li_seg = float(logsumexp(np.log(np.maximum(pii, 1e-300)) + LL[list(inseg)], axis=1).sum())
+        # independent mixture refitted on the same (ordered) families, with its own weights
+        li_seg = float(em_mixture(LL[sorted(inseg)])[0])
         res["hmm"] = {"lnL_ordered": float(lh), "lnL_total": float(lh + lrest), "pi": pih.tolist(),
                       "rho": float(rho), "mean_run_length": float(1 / rho),
                       "n_ordered_families": len(inseg), "n_segments": len(segs),

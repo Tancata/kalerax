@@ -179,8 +179,13 @@ python scripts/synteny_bootstrap.py --kalerax build/bin/kalerax \
 ```
 
 `--block-frac` makes simulated collinearity correlated within blocks, a
-conservative null. The LORe-versus-AORe comparison (D) can be run with
-synteny in the same way.
+conservative null.
+
+**4. Test LORe against AORe with synteny.** Add `--null-model aore`: data are
+simulated under the fitted AORe + synteny model (q-hat, r = 1, sigma_W-hat,
+sigma_N-hat), and each replicate is fitted with AORe (null) and LORe
+(alternative). Pass the observed AORe fit as `--null-run` and the observed
+LORe fit as `--wgd-run`.
 
 ## F. Fixed-parameter evaluation
 
@@ -259,6 +264,15 @@ Outputs:
   probability of resolution before the first speciation below the WGD), the
   MAP class, and its lnL contribution.
 - `aln_families.tsv`: per-family E[r] under each model.
+
+**4. Calibrate the HMM** (optional). The HMM gain over the independent
+mixture is calibrated by permuting families among the gene-ordered positions:
+
+```
+python scripts/hmm_permutation.py --grid 0=out_r0 ... --order blocks_order_alignment.tsv \
+       --perm 50 --perm-start 0 --seed 1 --out hmm_shard0     # run shards in parallel
+python scripts/hmm_permutation.py --merge hmm_shard*_hmm_perm.json --out hmm
+```
 
 **How to read it:**
 - **Coupling:** evidence for coupling is `block.gain_vs_indep` far above
