@@ -361,7 +361,8 @@ double AleEvaluator::optimizeSynteny(bool thorough) {
         [&](double x) { setSyntenyParams(x, _sigmaN); return computeLikelihood(); },
         std::max(lo, _sigmaWMin), hi, std::max(_sigmaW, _sigmaWMin), grid, iters);
     // q and sigma_W trade off: re-refine each retention once
-    for (unsigned int j = 0; j < _wgdNodes.size(); ++j) {
+    // (unless --fix-wgd-q holds the retentions at their declared q0)
+    for (unsigned int j = 0; j < _wgdNodes.size() && !_fixWgdQ; ++j) {
       auto node = _wgdNodes[j];
       robustMax1D(
           [&](double q) { setWGD(node, q); return computeLikelihood(); }, 0.0,
