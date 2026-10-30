@@ -42,6 +42,12 @@ struct AleState {
         optimizeResolution(false) {}
 
   /**
+   *  Does the checkpoint directory exist? If it does, make sure
+   *  all checkpoint files got saved in the previous run
+   */
+  static bool checkpointExists(const std::string &checkpointDir);
+
+  /**
    *  Dump the current run arguments to the checkpoint directory
    */
   static void writeCheckpointCmd(const std::string &currentCmd,

@@ -55,7 +55,7 @@ AleArguments::AleArguments(int iargc, char **iargv)
       speciesSearchStrategy(SpeciesSearchStrategy::SKIP),
       inferSpeciationOrders(false),
       modelParametrization(ModelParametrization::GLOBAL), gammaCategories(1),
-      recOpt(RecOpt::LBFGSB), fixRates(false), loreFixedR(-1.0), fixWgdQ(false), skipThoroughRates(false),
+      recOpt(RecOpt::LBFGSB), fixRates(false), loreFixedR(-1.0), fixWgdQ(false), gammaAlpha(-1.0), fixGammaAlpha(false), convergeRounds(1), skipThoroughRates(false),
       highways(false), highwayCandidatesStep1(DEFAULT_HIGHWAY_CANDIDATES_1),
       highwayCandidatesStep2(DEFAULT_HIGHWAY_CANDIDATES_2),
       skipFamilyFiltering(false),
@@ -116,6 +116,12 @@ AleArguments::AleArguments(int iargc, char **iargv)
       loreFixedR = atof(argv[++i]);
     } else if (arg == "--fix-wgd-q") {
       fixWgdQ = true;
+    } else if (arg == "--speciation-gamma-alpha") {
+      gammaAlpha = atof(argv[++i]);
+    } else if (arg == "--fix-gamma-alpha") {
+      fixGammaAlpha = true;
+    } else if (arg == "--converge-rounds") {
+      convergeRounds = static_cast<unsigned int>(std::max(1, atoi(argv[++i])));
     } else if (arg == "--lore-wgd") {
       loreWgds.push_back(parseWGDDeclaration(std::string(argv[++i])));
     } else if (arg == "--summary-only") {
@@ -507,6 +513,15 @@ void AleArguments::printHelp() const {
                << "in [0,1] on every resolvable WGD instead of fitting it; "
                << "r=1 is AORe. Requires --lore or --lore-wgd)"
                << std::endl;
+  Logger::info << "\t--speciation-gamma-alpha <a> (gamma shape of the speciation "
+               << "categories: starting value, or the held value with "
+               << "--fix-gamma-alpha; default start 1.0)" << std::endl;
+  Logger::info << "\t--converge-rounds <n> (repeat the thorough rate/WGD/synteny/"
+               << "gamma pass up to n times until lnL improves by < 0.1; "
+               << "default 1. Use with --speciation-gamma-categories: alpha "
+               << "and the overall rate are strongly correlated)" << std::endl;
+  Logger::info << "\t--fix-gamma-alpha (hold the gamma shape at "
+               << "--speciation-gamma-alpha instead of fitting it)" << std::endl;
   Logger::info << "\t--fix-wgd-q (hold every WGD retention q fixed at its "
                << "--wgd LABEL:q0 value instead of fitting it; with --fix-rates "
                << "--fix-synteny --lore-fixed-r this evaluates the likelihood at "
@@ -633,6 +648,16 @@ void AleArguments::checkValid() const {
       ok = false;
       Logger::info << "\nError: --lore-fixed-r must lie in [0,1]" << std::endl;
     }
+  }
+  if ((gammaAlpha > 0.0 || fixGammaAlpha) && gammaCategories < 2) {
+    ok = false;
+    Logger::info << "\nError: --speciation-gamma-alpha and --fix-gamma-alpha "
+                 << "require --speciation-gamma-categories >= 2" << std::endl;
+  }
+  if (fixGammaAlpha && gammaAlpha <= 0.0) {
+    ok = false;
+    Logger::info << "\nError: --fix-gamma-alpha requires --speciation-gamma-alpha <a> (a > 0)"
+                 << std::endl;
   }
   if (fixWgdQ && wgds.empty()) {
     ok = false;
