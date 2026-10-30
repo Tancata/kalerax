@@ -40,6 +40,12 @@ with sigma_W-hat, other pairs with sigma_N-hat, same --block-frac), and each
 replicate is fitted with AORe (null) and LORe (alternative). Then --null-run is
 the observed AORe fit and --wgd-run the observed LORe fit.
 
+Gamma rate heterogeneity: if the observed --null-run was fitted with
+--speciation-gamma-categories K (its model_parameters/wgd_parameters.txt has a
+'gamma alpha' row), replicates are simulated with the same K categories at the
+fitted alpha (one category per family, kalerax_sim.simulate_families) and every
+replicate fit adds --speciation-gamma-categories K. --no-gamma disables this.
+
 Each replicate's files are written, fitted and deleted before the next one
 starts, so disk use stays at about `workers` replicates.
 """
@@ -66,8 +72,15 @@ def read_log(path):
         mp = os.path.join(os.path.dirname(log), "model_parameters.txt")
     if os.path.exists(mp):
         rates = [float(x) for x in open(mp).readlines()[1].split()[1:4]]
+    gamma = None  # (alpha, categories) from the full-precision parameter file
+    wp = os.path.join(os.path.dirname(log), "model_parameters", "wgd_parameters.txt")
+    if os.path.exists(wp):
+        for l in open(wp):
+            f = l.rstrip("\n").split("\t")
+            if len(f) == 5 and f[0] == "gamma" and f[1] == "alpha":
+                gamma = (float(f[3]), int(float(f[4])))
     return dict(lnL=ll, sigmaW=sW, sigmaN=sN, kept=int(kept[-1]) if kept else None, rates=rates,
-                q=float(qs[-1]) if qs else None)
+                q=float(qs[-1]) if qs else None, gamma=gamma)
 
 
 def fit(args, famfile, syndir, out, wgd, lore=None):
@@ -81,6 +94,8 @@ def fit(args, famfile, syndir, out, wgd, lore=None):
             cmd += ["--synteny-min-sigmaW", str(args.min_sigmaW)]
         if (args.lore if lore is None else lore):
             cmd += ["--lore"]
+    if args.gamma:
+        cmd += ["--speciation-gamma-categories", str(args.gamma[1])]
     cmd += args.extra
     subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
     r = read_log(out)
@@ -97,8 +112,10 @@ def replicate(args, tree, params, b):
     shutil.rmtree(wd, ignore_errors=True)
     os.makedirs(wd)
     rng = np.random.default_rng(args.seed + 7919 * b)
+    ga, gk = args.gamma if args.gamma else (None, 1)
     fams, _ = simulate_families(tree, params, args.families, args.seed + b,
-                                origin_strategy="UNIFORM", keep_nodes=True)
+                                origin_strategy="UNIFORM", keep_nodes=True,
+                                gamma_alpha=ga, gamma_categories=gk)
     ff = write_family_set(fams, wd)
     syn = os.path.join(wd, "syn"); os.makedirs(syn)
     for i, f in enumerate(fams):
@@ -136,6 +153,8 @@ def main():
     ap.add_argument("--na-frac", type=float, default=0.0)
     ap.add_argument("--seed", type=int, default=12345)
     ap.add_argument("--out", required=True)
+    ap.add_argument("--no-gamma", action="store_true",
+                    help="ignore a gamma fit in --null-run (simulate and fit without gamma)")
     ap.add_argument("--extra", nargs=argparse.REMAINDER, default=[],
                     help="extra kalerax arguments for every fit (put last)")
     args = ap.parse_args()
@@ -144,6 +163,9 @@ def main():
     if obs0["rates"] is None or obs0["sigmaN"] is None:
         sys.exit("could not read null rates / sigma_N from --null-run")
     args.sigmaN = obs0["sigmaN"]
+    args.gamma = None if args.no_gamma else obs0["gamma"]
+    if any(a == "--speciation-gamma-categories" for a in args.extra):
+        sys.exit("pass gamma through the --null-run fit, not --extra")
     args.families = args.families or obs0["kept"]
     tree = SpeciesTree(open(args.species_tree).read())
     D, L, T = obs0["rates"]
@@ -158,7 +180,7 @@ def main():
         args.sim_sigmaW = args.sigmaN
     obs_stat = 2 * (obs1["lnL"] - obs0["lnL"])
     print(f"observed 2dlnL = {obs_stat:.2f}; null rates D={D} L={L} T={T}, sigma_N={args.sigmaN}, "
-          f"families={args.families}, block_frac={args.block_frac}", flush=True)
+          f"families={args.families}, block_frac={args.block_frac}, gamma={args.gamma}", flush=True)
     res = []
     outp = os.path.join(args.out, "bootstrap.jsonl")
     with ThreadPoolExecutor(max_workers=args.workers) as ex, open(outp, "a") as fh:
@@ -173,7 +195,8 @@ def main():
                 settings=dict(null_model=args.null_model, q_null=obs0["q"], sigmaW_sim=args.sim_sigmaW,
                               wgd=args.wgd, min_sigmaW=args.min_sigmaW, block_frac=args.block_frac,
                               na_frac=args.na_frac, families=args.families, sigmaN=args.sigmaN,
-                              rates=dict(D=D, L=L, T=T)))
+                              rates=dict(D=D, L=L, T=T),
+                              gamma=dict(alpha=args.gamma[0], categories=args.gamma[1]) if args.gamma else None))
     json.dump(summ, open(os.path.join(args.out, "summary.json"), "w"), indent=1)
     print(json.dumps(summ, indent=1))
 
