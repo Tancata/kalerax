@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <cmath>
 #include <fstream>
 #include <sstream>
 #include <cmath>
@@ -385,7 +386,7 @@ void AleEvaluator::resetAllPrecisions() {
     }
   }
   auto llAfter = computeLikelihoodFast();
-  if (fabs(llBefore - llAfter) > 0.1) {
+  if (std::fabs(llBefore - llAfter) > 0.1) {
     Logger::info << "Likelihood changed after lowering the precision: "
                  << std::endl;
     Logger::info << "Before: ll=" << llBefore << std::endl;

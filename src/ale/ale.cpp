@@ -25,16 +25,15 @@
 #include "AleOptimizer.hpp"
 #include "TrimFamilies.hpp"
 
-const char *version = "kalerax v1.4.1 (WGD/LORe fork of AleRax)";
+const char *version = "kalerax v1.4.2 (WGD/LORe fork of AleRax v1.4.2)";
 
 /**
  *  Create AleRax top directories
  */
-void initAleRaxDirectories(const AleArguments &args,
-                           const std::string &ccpDir) {
+void initAleRaxDirectories(const AleArguments &args) {
   FileSystem::mkdir(args.output, true);
-  FileSystem::mkdir(args.output + "/species_trees", true);
-  FileSystem::mkdir(ccpDir, true);
+  FileSystem::mkdir(FileSystem::joinPaths(args.output, "species_trees"), true);
+  FileSystem::mkdir(FileSystem::joinPaths(args.output, "ccps"), true);
   ParallelContext::barrier();
 }
 
@@ -215,12 +214,14 @@ void trimFamilies(const AleArguments &args, Families &families) {
 void computeInitialSpeciesTree(const Families &families,
                                const SpeciesTreeAlgorithm &algo,
                                const std::string &outputFile) {
+  std::unique_ptr<PLLRootedTree> tree;
   switch (algo) {
   case SpeciesTreeAlgorithm::MiniNJ:
-    MiniNJ::runMiniNJ(families)->save(outputFile);
+    tree = MiniNJ::runMiniNJ(families);
     break;
   case SpeciesTreeAlgorithm::Random:
-    std::make_unique<SpeciesTree>(families)->getTree().save(outputFile);
+    tree = std::make_unique<PLLRootedTree>(
+        Family::getLabelsFromFamilies(families));
     break;
   case SpeciesTreeAlgorithm::User:
     assert(false);
@@ -230,6 +231,9 @@ void computeInitialSpeciesTree(const Families &families,
                  << "is not implemented in AleRax\n"
                  << std::endl;
     ParallelContext::abort(0);
+  }
+  if (ParallelContext::getRank() == 0) {
+    tree->save(outputFile);
   }
 }
 
@@ -262,11 +266,10 @@ void initStartingSpeciesTree(AleArguments &args, const Families &families) {
         Logger::info << e.what() << std::endl;
         ParallelContext::abort(153);
       }
+      // read the initial tree, provide it with internal node labels
+      // and save it as the starting tree
+      PLLRootedTree::labelRootedTree(args.speciesTree, startingSpeciesTree);
     }
-    ParallelContext::barrier();
-    // read the initial tree, provide it with internal node labels
-    // and save it as the starting tree
-    PLLRootedTree::labelRootedTree(args.speciesTree, startingSpeciesTree);
   } else {
     // compute the initial tree and save it as the starting tree
     computeInitialSpeciesTree(families, args.speciesTreeAlgorithm,
@@ -679,17 +682,15 @@ void declareWGDs(const AleArguments &args, AleOptimizer &optimizer,
 void run(AleArguments &args) {
   Random::setSeed(static_cast<unsigned int>(args.seed));
   // initializing the output dir, ccp files, species tree, model info, etc.
-  bool checkpointDetected = AleOptimizer::checkpointExists(args.output);
   auto ckpDir = AleOptimizer::getCheckpointDir(args.output);
-  if (checkpointDetected) {
-    Logger::info << "Checkpoint detected" << std::endl;
+  bool checkpointDetected = AleState::checkpointExists(ckpDir);
+  if (!checkpointDetected) {
+    initAleRaxDirectories(args);
+  } else {
     AleState::checkCheckpointCmd(args.getCommand(), ckpDir);
   }
-  auto ccpDir = FileSystem::joinPaths(args.output, "ccps");
-  if (!checkpointDetected) {
-    initAleRaxDirectories(args, ccpDir);
-  }
   printInitialMessage(args);
+  auto ccpDir = FileSystem::joinPaths(args.output, "ccps");
   auto ccpDimensionFile = FileSystem::joinPaths(ccpDir, "ccpdim.txt");
   auto families = FamiliesFileParser::parseFamiliesFile(args.families);
   for (auto &family : families) {
@@ -828,13 +829,13 @@ void run(AleArguments &args) {
 /**
  *  This main will be called by each process and is the entry
  *  point to AleRax. It inits the parallel context, the logger,
- *  reads the arguments, runs AleRax and closes everything.
+ *  reads the arguments, runs AleRax, and closes everything.
  *
- *  If comm is set to nullptr, MPI_Init will be called to initiate the
- *  MPI context
+ *  If commPtr is set to nullptr, MPI_Init() will be called to
+ *  initialize the MPI context
  */
-int alerax_main(int argc, char **argv, void *comm) {
-  ParallelContext::init(comm);
+int alerax_main(int argc, char **argv, void *commPtr) {
+  ParallelContext::init(commPtr);
   Logger::init();
   Logger::timed << version << std::endl;
   AleArguments args(argc, argv);
@@ -847,7 +848,7 @@ int alerax_main(int argc, char **argv, void *comm) {
 
 int main(int argc, char **argv) {
 #ifdef WITH_MPI
-  // the null communicator signals that we need to call MPI_Init
+  // the null communicator signals that we need to call MPI_Init()
   return alerax_main(argc, argv, nullptr);
 #else
   // this fake communicator signals that we're not using MPI

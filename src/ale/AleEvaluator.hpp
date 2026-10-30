@@ -13,9 +13,9 @@
 #include "OptimizationClasses.hpp"
 #include "Synteny.hpp"
 
+struct RecModelInfo;
 class AleOptimizer;
 class SpeciesTree;
-class RecModelInfo;
 class PerCoreGeneTrees;
 class MultiModelInterface;
 class Scenario;

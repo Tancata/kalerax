@@ -3,7 +3,7 @@
 #include <string>
 #include <vector>
 
-#include "IO/ArgumentsHelper.hpp"
+#include <IO/ArgumentsHelper.hpp>
 
 /**
  *  A whole-genome duplication declared on the command line.
