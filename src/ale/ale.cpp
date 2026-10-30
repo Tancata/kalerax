@@ -503,7 +503,19 @@ void runSecondFinalRateOptimization(const AleArguments &args,
   if (!args.skipThoroughRates) {
     Logger::info << std::endl;
     Logger::timed << "Final model rate optimization, thorough..." << std::endl;
-    speciesTreeOptimizer.optimizeModelRates(true);
+    auto ll = speciesTreeOptimizer.optimizeModelRates(true);
+    for (unsigned int round = 2; round <= args.convergeRounds; ++round) {
+      Logger::timed << "Thorough pass " << round << "/" << args.convergeRounds
+                    << " (--converge-rounds), ll=" << ll << std::endl;
+      auto newLL = speciesTreeOptimizer.optimizeModelRates(true);
+      auto gain = newLL - ll;
+      ll = newLL;
+      if (gain < 0.1) {
+        Logger::timed << "Converged after " << round << " thorough passes (gain "
+                      << gain << ")" << std::endl;
+        break;
+      }
+    }
   }
   speciesTreeOptimizer.saveRatesAndLL();
   auto finalLL = speciesTreeOptimizer.getEvaluator().computeLikelihood();
@@ -760,6 +772,12 @@ void run(AleArguments &args) {
   declareWGDs(args, speciesTreeOptimizer, checkpointDetected);
   speciesTreeOptimizer.getEvaluator().setFixedResolution(args.loreFixedR);
   speciesTreeOptimizer.getEvaluator().setFixWGDRetentions(args.fixWgdQ);
+  if (args.gammaAlpha > 0.0) {
+    speciesTreeOptimizer.getEvaluator().setAlpha(args.gammaAlpha);
+    Logger::timed << "Gamma shape alpha " << (args.fixGammaAlpha ? "held fixed at " : "started at ")
+                  << args.gammaAlpha << " (--speciation-gamma-alpha)" << std::endl;
+  }
+  speciesTreeOptimizer.getEvaluator().setFixGammaAlpha(args.fixGammaAlpha);
   if (args.loreFixedR >= 0.0) {
     Logger::timed << "LORe resolution r held fixed at " << args.loreFixedR
                   << " (--lore-fixed-r)" << std::endl;

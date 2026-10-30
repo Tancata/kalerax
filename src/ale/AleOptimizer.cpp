@@ -383,6 +383,10 @@ void AleOptimizer::saveRatesAndLL() {
       fp << "synteny\tsigma\tNA\t" << _evaluator->getSigmaW() << "\t"
          << _evaluator->getSigmaN() << std::endl;
     }
+    if (_info.gammaCategories > 1) {
+      fp << "gamma\talpha\tNA\t" << _evaluator->getGammaAlpha() << "\t"
+         << _info.gammaCategories << std::endl;
+    }
   }
   // Logger::info << "save model rates to " << ratesDir << std::endl;
   ParallelContext::barrier();

@@ -202,6 +202,8 @@ public:
   void setFixedResolution(double r) { _fixedR = r; }
   double getFixedResolution() const { return _fixedR; }
   void setFixWGDRetentions(bool fix) { _fixWgdQ = fix; }
+  void setFixGammaAlpha(bool fix) { _fixGammaAlpha = fix; }
+  double getGammaAlpha() const { return _mixtureAlpha; }
 
   /**
    *  Restrict LORe to a specific declared WGD (by node index): only the
@@ -388,6 +390,7 @@ private:
   bool _fixSynteny = false;
   double _fixedR = -1.0;  // --lore-fixed-r (< 0: r is fitted)
   bool _fixWgdQ = false;  // --fix-wgd-q
+  bool _fixGammaAlpha = false;  // --fix-gamma-alpha
   double _sigmaW = 0.5;
   double _sigmaWMin = 0.0;
   double _sigmaN = 0.05;

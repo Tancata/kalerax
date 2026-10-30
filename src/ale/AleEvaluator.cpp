@@ -1057,29 +1057,89 @@ static double callback(void *p, double x) {
   return -ll;
 }
 
+// kalerax: mean per-family event multiplier E_c[1/s_c] of the gamma categories.
+// In category c, D/L/T are effectively scaled by 1/s_c (speciation weight s_c),
+// so alpha and the overall rate lie on a strong ridge.
+static double meanEventMultiplier(double alpha, unsigned int ncat) {
+  std::vector<double> sc(ncat);
+  corax_compute_gamma_cats(alpha, ncat, &sc[0], CORAX_GAMMA_RATES_MEAN);
+  double m = 0.0;
+  for (auto v : sc) {
+    m += 1.0 / v;
+  }
+  return m / static_cast<double>(ncat);
+}
+
+struct CompensatedAlphaCtx {
+  AleEvaluator *evaluator;
+  std::vector<Parameters> base;  // per local family, at the starting alpha
+  double m0;
+  unsigned int ncat;
+};
+
+// alpha step that keeps the mean event intensity fixed: rates are rescaled by
+// m(alpha0)/m(alpha) so the move runs along the ridge rather than across it
+static double compensatedCallback(void *p, double x) {
+  auto *ctx = (CompensatedAlphaCtx *)p;
+  double f = ctx->m0 / meanEventMultiplier(x, ctx->ncat);
+  for (unsigned int i = 0; i < ctx->base.size(); ++i) {
+    ctx->evaluator->setFamilyParameters(i, ctx->base[i] * f);
+  }
+  ctx->evaluator->setAlpha(x);
+  return -ctx->evaluator->computeLikelihood();
+}
+
 double AleEvaluator::optimizeGammaRates() {
   auto ll = computeLikelihood();
-  if (_info.gammaCategories == 1) {
+  if (_info.gammaCategories == 1 || _fixGammaAlpha) {
     return ll;
   }
   Logger::timed << "[Species search] Optimizing gamma categories" << std::endl;
   double minAlpha = CORAX_OPT_MIN_ALPHA;
   double maxAlpha = CORAX_OPT_MAX_ALPHA;
   double startingAlpha = _mixtureAlpha;
-  double tolerance = 0.1;
+  // kalerax: 0.1 (upstream) is far too coarse; the lnL can be sharply peaked
+  // in alpha (tens of lnL units per 0.1), and Brent then stalls off-optimum
+  double tolerance = 1e-3;
   double fx = -ll;
   double f2x = 1.0;
   ParallelContext::barrier();
-  double alpha =
-      corax_opt_minimize_brent(minAlpha, startingAlpha, maxAlpha, tolerance,
-                               &fx, &f2x, (void *)this, &callback);
+  double alpha = startingAlpha;
+  if (_optimizeRates && !_info.perFamilyRates) {
+    // rate-compensated step (kalerax), then a plain alpha step at the new rates
+    CompensatedAlphaCtx ctx;
+    ctx.evaluator = this;
+    ctx.ncat = _info.gammaCategories;
+    ctx.m0 = meanEventMultiplier(startingAlpha, ctx.ncat);
+    for (unsigned int i = 0; i < getLocalFamilyNumber(); ++i) {
+      ctx.base.push_back(_modelParameters[i].getParameters());
+    }
+    double fc = -ll;
+    double f2c = 1.0;
+    double ac = corax_opt_minimize_brent(minAlpha, startingAlpha, maxAlpha,
+                                         tolerance, &fc, &f2c, (void *)&ctx,
+                                         &compensatedCallback);
+    if (-fc > ll) {
+      compensatedCallback((void *)&ctx, ac);
+      alpha = ac;
+      fx = fc;
+    } else {  // no gain: restore the starting point exactly
+      for (unsigned int i = 0; i < ctx.base.size(); ++i) {
+        setFamilyParameters(i, ctx.base[i]);
+      }
+      setAlpha(startingAlpha);
+    }
+    startingAlpha = alpha;
+  }
+  alpha = corax_opt_minimize_brent(minAlpha, startingAlpha, maxAlpha, tolerance,
+                                   &fx, &f2x, (void *)this, &callback);
   ll = -fx;
   setAlpha(alpha);
   std::vector<double> categories(_info.gammaCategories);
   corax_compute_gamma_cats(alpha, categories.size(), &categories[0],
                            CORAX_GAMMA_RATES_MEAN);
   Logger::timed << "[Species search]   After gamma cat  opt, ll=" << ll
-                << std::endl;
+                << " alpha=" << alpha << std::endl;
   if (_optimizeVerbose) {
     Logger::info << "alpha=" << alpha << std::endl;
     Logger::info << "speciation rate categories: ";

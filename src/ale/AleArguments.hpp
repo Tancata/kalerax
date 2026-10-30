@@ -108,6 +108,9 @@ public:
   double loreFixedR;
   // hold every WGD retention q fixed at its --wgd LABEL:q0 value
   bool fixWgdQ;
+  double gammaAlpha;     // --speciation-gamma-alpha (<=0: default start 1.0)
+  bool fixGammaAlpha;    // --fix-gamma-alpha
+  unsigned int convergeRounds;  // --converge-rounds (max thorough passes)
   bool skipThoroughRates;
 
   // highways
