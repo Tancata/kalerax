@@ -1082,6 +1082,12 @@ struct CompensatedAlphaCtx {
 static double compensatedCallback(void *p, double x) {
   auto *ctx = (CompensatedAlphaCtx *)p;
   double f = ctx->m0 / meanEventMultiplier(x, ctx->ncat);
+  if (!(f >= 0.25 && f <= 4.0)) {
+    // at most a 4x joint rescaling of D/L/T per step: far moves can push the
+    // rates into a regime (D/L ~< 0.003 with a WGD declared) where clade
+    // probabilities exceed 1; later passes can move further
+    return 1e300;
+  }
   for (unsigned int i = 0; i < ctx->base.size(); ++i) {
     ctx->evaluator->setFamilyParameters(i, ctx->base[i] * f);
   }
@@ -1116,7 +1122,11 @@ double AleEvaluator::optimizeGammaRates() {
     }
     double fc = -ll;
     double f2c = 1.0;
-    double ac = corax_opt_minimize_brent(minAlpha, startingAlpha, maxAlpha,
+    // local window around the current alpha: far moves along the ridge imply
+    // extreme rate rescaling; the plain step below still covers the full range
+    double lo = std::max(minAlpha, startingAlpha / 5.0);
+    double hi = std::min(maxAlpha, startingAlpha * 5.0);
+    double ac = corax_opt_minimize_brent(lo, startingAlpha, hi,
                                          tolerance, &fc, &f2c, (void *)&ctx,
                                          &compensatedCallback);
     if (-fc > ll) {
