@@ -401,7 +401,9 @@ template <class REAL> void UndatedDTLMultiModel<REAL>::updateCLV(CID cid) {
         auto ec = e * _gammaCatNumber + c;
         REAL p = REAL();
         ok = computeProbability(cid, speciesNode, c, p);
-        assert(ok);
+        if (!ok) {
+          this->_invalidCLV = true; // see MultiModel::computeLogLikelihood
+        }
         transferSum += p;
         uq[ec] = p; // raw P_e(gamma)
 
