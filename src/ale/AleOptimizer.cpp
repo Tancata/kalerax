@@ -65,7 +65,7 @@ void AleOptimizer::randomizeRoot() {
   assert(getCurrentStep() == AleStep::SpeciesTreeOpt);
   auto N = getSpeciesTree().getTree().getInnerNodeNumber();
   for (unsigned int i = 0; i < N; ++i) {
-    auto direction = Random::getInt() % 4;
+    auto direction = Random::getUInt() % 4;
     if (SpeciesTreeOperator::canChangeRoot(getSpeciesTree(), direction)) {
       SpeciesTreeOperator::changeRoot(getSpeciesTree(), direction);
     }
@@ -382,6 +382,10 @@ void AleOptimizer::saveRatesAndLL() {
     if (_evaluator->hasSynteny()) {
       fp << "synteny\tsigma\tNA\t" << _evaluator->getSigmaW() << "\t"
          << _evaluator->getSigmaN() << std::endl;
+    }
+    if (_info.gammaCategories > 1) {
+      fp << "gamma\talpha\tNA\t" << _evaluator->getGammaAlpha() << "\t"
+         << _info.gammaCategories << std::endl;
     }
   }
   // Logger::info << "save model rates to " << ratesDir << std::endl;

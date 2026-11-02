@@ -12,7 +12,6 @@ set(kalerax_SOURCES ale.cpp
 # kalerax: the WGD/LORe fork of AleRax. The binary is named distinctly from the
 # upstream AleRax executable.
 add_program(kalerax "${kalerax_SOURCES}")
-target_link_libraries(kalerax PRIVATE mpi-scheduler)
 install(TARGETS kalerax DESTINATION bin)
 
 # WGD regression test (not installed): _hasWGD all-false must reproduce the

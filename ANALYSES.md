@@ -313,6 +313,34 @@ p ≤ 0.001); *Glycine* is a negative control (no coupling, r̂ ≈ 1).
   `synteny_bound_regression.py` take `<kalerax> <workdir>`; the shell tests
   take the binary path and need a writable `mktemp`.
 
+## I. Rate heterogeneity among families (gamma)
+
+`--speciation-gamma-categories K` (inherited from AleRax) gives each family one
+of K equiprobable rate categories. In category c the speciation weight is the
+gamma scaler s_c (mean 1, shape alpha) and D, L, T, S are normalised jointly,
+so D, L and T are scaled together by 1/s_c; the D:L:T ratios are fixed. The
+per-family likelihood is the mean over categories, each conditioned on survival.
+
+Without it, LORe can absorb rate heterogeneity: a WGD with r -> 0 and q > 0
+is a duplication/transfer-free lineage class, i.e. a two-class rate mixture.
+Fit gamma before interpreting r or q.
+
+- The fitted alpha is written to `model_parameters/wgd_parameters.txt`
+  (`gamma alpha NA <alpha> <K>`).
+- `--speciation-gamma-alpha <a>` sets the starting alpha; with
+  `--fix-gamma-alpha` it is held. Fixed-parameter grids (section F) under gamma
+  add `--speciation-gamma-categories K --speciation-gamma-alpha <a>
+  --fix-gamma-alpha`; this re-evaluates a free fit exactly.
+- Optimisation: alpha and the overall rate lie on a strong ridge. kalerax first
+  moves alpha with D, L, T rescaled to keep the mean event intensity
+  E_c[1/s_c] fixed, then refines alpha alone (Brent tolerance 1e-3; upstream
+  0.1). `--converge-rounds n` repeats the thorough pass until lnL gains < 0.1.
+- Simulation: `kalerax_sim.simulate_families(..., gamma_alpha=a,
+  gamma_categories=K)` draws one category per family and redoes rejections
+  within it. `synteny_bootstrap.py` picks up gamma from the `--null-run`
+  parameter file automatically (`--no-gamma` to disable); `block_lore_sim.py`
+  takes `gamma_alpha` as its 9th argument.
+
 ## Practical notes
 
 - **Runtime:** a full LORe + synteny fit of about 18k families with 1000

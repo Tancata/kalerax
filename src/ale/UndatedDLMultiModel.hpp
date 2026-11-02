@@ -270,7 +270,9 @@ template <class REAL> void UndatedDLMultiModel<REAL>::updateCLV(CID cid) {
       const double r = _resolutionProbs[e]; // per-branch resolution prob
       REAL p = REAL();
       ok = computeProbability(cid, speciesNode, c, p);
-      assert(ok);
+      if (!ok) {
+        this->_invalidCLV = true; // see MultiModel::computeLogLikelihood
+      }
       uq[ec] = p; // resolved CLV R
 
       // --- LORe: unresolved (tetrasomic) CLV U (STEP 4) ---

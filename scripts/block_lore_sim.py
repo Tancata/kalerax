@@ -10,7 +10,10 @@ HMM along the simulated gene order (blocks are contiguous). coupling=0 is the
 no-block-structure null (permutation p must be ~ Uniform(0,1)).
 
 usage: block_lore_sim.py <kalerax> <species_tree> <workdir> <seed> <coupling>
-       [n_blocks=160] [mean_block_size=8] [n_perm=200]
+       [n_blocks=160] [mean_block_size=8] [n_perm=200] [gamma_alpha=none] [gamma_cats=4]
+With gamma_alpha, families are simulated with gamma rate categories (one per
+family) and every kalerax fit uses --speciation-gamma-categories; the grid holds
+alpha at the free fit's estimate (--fix-gamma-alpha).
 Writes <workdir>/result.json and deletes the kalerax run directories.
 """
 import json, os, shutil, subprocess, sys
@@ -45,7 +48,9 @@ def fixed_extra(par, r):
     sw, sn = par[("synteny", "sigma")]
     return ["--fix-rates", "--d", repr(rate["D"]), "--l", repr(rate["L"]), "--t", repr(rate["T"]),
             "--wgd", f"{WGD}:{q!r}", "--fix-wgd-q", "--fix-synteny", "--synteny-params",
-            f"{sw!r},{sn!r}", "--skip-thorough-rates", "--lore", "--lore-fixed-r", repr(r)]
+            f"{sw!r},{sn!r}", "--skip-thorough-rates", "--lore", "--lore-fixed-r", repr(r)] + (
+        ["--speciation-gamma-alpha", repr(par[("gamma", "alpha")][0]), "--fix-gamma-alpha"]
+        if ("gamma", "alpha") in par else [])
 
 
 def main():
@@ -53,11 +58,15 @@ def main():
     nb = int(sys.argv[6]) if len(sys.argv) > 6 else 160
     mbs = float(sys.argv[7]) if len(sys.argv) > 7 else 8
     nperm = int(sys.argv[8]) if len(sys.argv) > 8 else 200
+    galpha = float(sys.argv[9]) if len(sys.argv) > 9 and sys.argv[9] != "none" else None
+    gcats = int(sys.argv[10]) if len(sys.argv) > 10 else 4
+    gfit = ["--speciation-gamma-categories", str(gcats)] if galpha else []
     os.makedirs(wd, exist_ok=True)
     spt = open(spf).read().strip()
     t = ks.SpeciesTree(spt); e = t.lca(WGD.split(","))
     fams, _ = ks.simulate_block_families(t, 0.0574, 0.0922, 0.0173, e, 0.9, R_CLASSES, WEIGHTS,
-                                         n_blocks=nb, mean_block_size=mbs, seed=seed, coupling=coupling)
+                                         n_blocks=nb, mean_block_size=mbs, seed=seed, coupling=coupling,
+                                         gamma_alpha=galpha, gamma_categories=gcats if galpha else 1)
     data = os.path.join(wd, "data")
     ff = ks.write_family_set(fams, data)
     syn = os.path.join(data, "syn"); os.makedirs(syn, exist_ok=True)
@@ -69,7 +78,7 @@ def main():
     sp = os.path.join(wd, "sp.nw"); open(sp, "w").write(spt + "\n")
 
     def run(out, extra):
-        cmd = [kx, "-f", ff, "-s", sp, "--synteny-dir", syn, "-p", out] + BASE + extra
+        cmd = [kx, "-f", ff, "-s", sp, "--synteny-dir", syn, "-p", out] + BASE + gfit + extra
         p = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         assert p.returncode == 0, extra
 

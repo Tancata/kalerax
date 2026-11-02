@@ -152,6 +152,10 @@ protected:
   const bool _memorySavings;
   ConditionalClades _ccp;
   std::unordered_map<size_t, double> _llCache;
+  // kalerax: set by updateCLV when computeProbability rejects a clade
+  // probability (> 1). The evaluation is then reported as invalid (very low
+  // lnL) so that optimisers reject the trial point instead of aborting.
+  bool _invalidCLV = false;
 
   // --- Synteny (Layer 1) state ---
   bool _synActive = false;
@@ -561,7 +565,15 @@ template <class REAL> double MultiModel<REAL>::computeLogLikelihood() {
     allocateMemory();
   }
   // compute CLVs based on recomputed per-branch probas
+  this->_invalidCLV = false;
   updateCLVs();
+  if (this->_invalidCLV) {
+    // invalid region of parameter space (clade probability > 1): not cached
+    if (this->_memorySavings) {
+      deallocateMemory();
+    }
+    return -1e15;
+  }
   // compute the species tree LL
   REAL res = REAL();
   std::vector<REAL> categoryLikelihoods(getGammaCatNumber(), REAL());

@@ -110,13 +110,18 @@ class Params:
     wgds    : list of (branch_index, q, r). r painted over the WGD subtree,
               but pinned to 1 for a WGD on a terminal branch (as kalerax).
     """
-    def __init__(self, tree: SpeciesTree, D, L, T=0.0, wgds=(), branch_rates=None):
+    def __init__(self, tree: SpeciesTree, D, L, T=0.0, wgds=(), branch_rates=None,
+                 speciation_weight=1.0):
         n = tree.n
+        self._init = (tree, D, L, T, tuple(wgds), branch_rates)
         Dv, Lv, Tv = np.full(n, D, float), np.full(n, L, float), np.full(n, T, float)
         for e, (d, l, t) in (branch_rates or {}).items():
             Dv[e], Lv[e], Tv[e] = d, l, t
-        s = 1.0 + Dv + Lv + Tv
-        self.PD, self.PL, self.PT, self.PS = Dv / s, Lv / s, Tv / s, 1.0 / s
+        # kalerax gamma category c: speciation weight = gamma scaler s_c, then
+        # D, L, T, S are normalised jointly (UndatedDTLMultiModel::recomputeSpeciesProbabilities)
+        sw = float(speciation_weight)
+        s = sw + Dv + Lv + Tv
+        self.PD, self.PL, self.PT, self.PS = Dv / s, Lv / s, Tv / s, sw / s
         self.q = np.zeros(n)
         self.r = np.ones(n)
         self.has_wgd = np.zeros(n, bool)
@@ -127,6 +132,29 @@ class Params:
                 for k in tree.subtree(e):
                     self.r[k] = r
         self.dtl = T > 0 or any(t > 0 for (_, _, t) in (branch_rates or {}).values())
+
+
+    def with_speciation_weight(self, sw):
+        tree, D, L, T, wgds, br = self._init
+        return Params(tree, D, L, T, wgds=wgds, branch_rates=br, speciation_weight=sw)
+
+
+def gamma_scalers(alpha, ncat):
+    """Mean-of-quantile-bin gamma category rates (mean 1), as in
+    corax_compute_gamma_cats(alpha, ncat, ., CORAX_GAMMA_RATES_MEAN)."""
+    from scipy.special import gammainc
+    from scipy.stats import gamma as G
+    a = float(alpha)
+    cuts = G.ppf(np.arange(1, ncat) / ncat, a, scale=1.0 / a)
+    cdf1 = np.concatenate([[0.0], gammainc(a + 1.0, cuts * a), [1.0]])
+    return ncat * np.diff(cdf1)
+
+
+def category_params(p, gamma_alpha=None, gamma_categories=1):
+    """List of Params, one per gamma category (just [p] without gamma)."""
+    if gamma_alpha is None or gamma_categories < 2:
+        return [p]
+    return [p.with_speciation_weight(sc) for sc in gamma_scalers(gamma_alpha, gamma_categories)]
 
 
 # ----------------------------------------------------------------- simulation
@@ -222,20 +250,39 @@ def to_newick(node, counter):
 
 def simulate_families(tree: SpeciesTree, p: Params, n_fam: int, seed: int,
                       min_species: int = 4, origin_strategy="UNIFORM",
-                      keep_all=False, keep_nodes=False):
+                      keep_all=False, keep_nodes=False, gamma_alpha=None, gamma_categories=1):
     """Simulate surviving families (rejection on extinction) and apply the
     kalerax coverage filter (>= min_species distinct species) unless keep_all.
 
+    With gamma_alpha and gamma_categories >= 2 (kalerax
+    --speciation-gamma-categories), each family first draws one category
+    uniformly and all rejections are redone inside that category, which matches
+    the kalerax likelihood (per-category survival conditioning, then the mean
+    over categories). Without gamma the random stream is unchanged.
+
     Returns list of dicts: newick, mapping, counts (per-branch arrays), origin,
-    n_genes, n_species; plus a dict of filter statistics.
+    n_genes, n_species (+ gamma_cat with gamma); plus a dict of filter statistics.
     """
     import sys
     sys.setrecursionlimit(100000)
     rng = np.random.default_rng(seed)
-    sim = FamilySim(tree, p, rng)
+    cats = category_params(p, gamma_alpha, gamma_categories)
+    sims = [FamilySim(tree, pc, rng) for pc in cats]
+    sim = sims[0]
     out, stats = [], dict(attempts=0, extinct=0, filtered=0, overflow=0)
     nodes = np.arange(tree.n) if origin_strategy == "UNIFORM" else np.array([tree.root])
+    gcat = None
+    tries = 0
     while len(out) < n_fam:
+        if len(sims) > 1 and gcat is None:
+            gcat = int(rng.integers(len(sims)))
+            sim = sims[gcat]
+            tries = 0
+        tries += 1
+        if gcat is not None and tries > MAX_TRIES_PER_FAMILY:
+            raise RuntimeError(f"gamma category {gcat} produced no acceptable family in "
+                               f"{MAX_TRIES_PER_FAMILY} attempts (supercritical or near-certain "
+                               f"extinction/filtering at alpha={gamma_alpha}); stats={stats}")
         stats["attempts"] += 1
         o = int(nodes[rng.integers(len(nodes))])
         try:
@@ -253,13 +300,19 @@ def simulate_families(tree: SpeciesTree, p: Params, n_fam: int, seed: int,
             continue
         out.append(dict(newick=nwk, mapping=mp, origin=o, n_genes=len(mp), n_species=nsp,
                         counts={k: v.copy() for k, v in sim.cnt.items()},
-                        **({"root": root} if keep_nodes else {})))
+                        **({"root": root} if keep_nodes else {}),
+                        **({"gamma_cat": gcat} if gcat is not None else {})))
+        gcat = None
     return out, stats
+
+
+MAX_TRIES_PER_FAMILY = 100000
 
 
 def simulate_block_families(tree: SpeciesTree, D, L, T, wgd_edge, q, r_classes, weights,
                             n_blocks, mean_block_size, seed, coupling=1.0, min_species=4,
-                            origin_strategy="UNIFORM", keep_nodes=True):
+                            origin_strategy="UNIFORM", keep_nodes=True,
+                            gamma_alpha=None, gamma_categories=1):
     """Block-coupled LORe: families in the same syntenic block share one latent
     resolution class. Each block b draws a class c_b ~ Categorical(weights) and
     a size 1 + Poisson(mean_block_size - 1); every family in the block is then
@@ -273,7 +326,10 @@ def simulate_block_families(tree: SpeciesTree, D, L, T, wgd_edge, q, r_classes, 
     import sys
     sys.setrecursionlimit(100000)
     rng = np.random.default_rng(seed)
-    sims = [FamilySim(tree, Params(tree, D, L, T, wgds=[(wgd_edge, q, r)]), rng) for r in r_classes]
+    # sims[r_class][gamma_cat]; one gamma category per family (see simulate_families)
+    sims = [[FamilySim(tree, pc, rng) for pc in
+             category_params(Params(tree, D, L, T, wgds=[(wgd_edge, q, r)]),
+                             gamma_alpha, gamma_categories)] for r in r_classes]
     nodes = np.arange(tree.n) if origin_strategy == "UNIFORM" else np.array([tree.root])
     w = np.asarray(weights, float) / np.sum(weights)
     out, stats = [], dict(attempts=0, extinct=0, filtered=0, overflow=0)
@@ -282,8 +338,14 @@ def simulate_block_families(tree: SpeciesTree, D, L, T, wgd_edge, q, r_classes, 
         size = 1 + int(rng.poisson(max(mean_block_size - 1.0, 0.0)))
         for _ in range(size):
             cf = cb if rng.random() < coupling else int(rng.choice(len(w), p=w))
-            sim = sims[cf]
+            gcat = int(rng.integers(len(sims[cf]))) if len(sims[cf]) > 1 else None
+            sim = sims[cf][gcat or 0]
+            tries = 0
             while True:
+                tries += 1
+                if tries > MAX_TRIES_PER_FAMILY:
+                    raise RuntimeError(f"no acceptable family in {MAX_TRIES_PER_FAMILY} attempts "
+                                       f"(r_class {cf}, gamma category {gcat}); stats={stats}")
                 stats["attempts"] += 1
                 o = int(nodes[rng.integers(len(nodes))])
                 try:
@@ -303,7 +365,8 @@ def simulate_block_families(tree: SpeciesTree, D, L, T, wgd_edge, q, r_classes, 
             out.append(dict(newick=nwk, mapping=mp, origin=o, n_genes=len(mp), n_species=nsp,
                             block=b, block_class=cb, r_class=cf,
                             counts={k: v.copy() for k, v in sim.cnt.items()},
-                            **({"root": root} if keep_nodes else {})))
+                            **({"root": root} if keep_nodes else {}),
+                            **({"gamma_cat": gcat} if gcat is not None else {})))
     return out, stats
 
 
