@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cmath>
+
 #include <cstdlib> // std::abort for the always-on LORe consistency guard
 
 #include <trees/DatedTree.hpp>
@@ -139,6 +141,39 @@ private:
   std::vector<REAL> _uEU;          // unresolved (tetrasomic) extinction, per (e,cat)
   std::vector<double> _resolutionProbs; // per species branch: r in [0,1]; 1==AORe
   double _dupSplitWeight = 1.0; // duplication-split weight (1 = ALE convention)
+  // Upper bound on a valid clade value P_e(gamma). Under the ALE convention
+  // (_dupSplitWeight == 1) clade values are probabilities, so the bound is 1.
+  // Under forward-process weighting every D split and WGD/LORe doubling split
+  // carries a factor _dupSplitWeight (2): it is the labelling factor of the two
+  // exchangeable daughter copies, and it is parameter-independent within a
+  // labelled gene tree, so it does not bias estimates. A clade with n leaves has
+  // at most n-1 such splits in any scenario, so a valid value satisfies
+  //   P_e(gamma) <= _dupSplitWeight^(n-1) * P_e^ALE(gamma) <= _dupSplitWeight^(n-1).
+  // Values above 1 are therefore expected under forward weighting (typically a
+  // well-retained, low-loss WGD: a retained cherry scores ~2*R*R ~ 2).
+  double cladeProbaBound(CID cid) {
+    if (_dupSplitWeight == 1.0) {
+      return 1.0;
+    }
+    if (_cladeLeafCount.size() != this->_ccp.getCladesNumber()) {
+      _cladeLeafCount.assign(this->_ccp.getCladesNumber(), 0);
+    }
+    return std::pow(_dupSplitWeight,
+                    static_cast<double>(cladeLeafCount(cid)) - 1.0);
+  }
+  unsigned int cladeLeafCount(CID cid) {
+    auto &n = _cladeLeafCount[cid];
+    if (n == 0) {
+      if (this->_ccp.isLeaf(cid)) {
+        n = 1;
+      } else {
+        const auto &cs = this->_ccp.getCladeSplits(cid).front();
+        n = cladeLeafCount(cs.left) + cladeLeafCount(cs.right);
+      }
+    }
+    return n;
+  }
+  std::vector<unsigned int> _cladeLeafCount; // lazily filled, per CID
   // resolution-backtrace: number of lineages abandoned at the resample cap (a
   // degenerate cell where only DL/TL "nothing observed" events have mass).
   size_t _btCapHits = 0;
@@ -937,7 +972,7 @@ bool UndatedDTLMultiModel<REAL>::computeProbability(
       scale(temp);
       applySynScale(temp, synS);
       proba += temp;
-      if (proba > REAL(1.0)) {
+      if (proba > REAL(cladeProbaBound(cid))) {
         std::cerr << "error " << _dtlclvs[cidLeft]._uq[ec] << " "
                   << _dtlclvs[cidRight]._uq[dc] << " " << highway.proba[c]
                   << " " << freq << std::endl;
@@ -957,7 +992,7 @@ bool UndatedDTLMultiModel<REAL>::computeProbability(
       scale(temp);
       applySynScale(temp, synS);
       proba += temp;
-      if (proba > REAL(1.0)) {
+      if (proba > REAL(cladeProbaBound(cid))) {
         std::cerr << "error " << _dtlclvs[cidRight]._uq[ec] << " "
                   << _dtlclvs[cidLeft]._uq[dc] << " " << highway.proba[c] << " "
                   << freq << std::endl;
@@ -1076,9 +1111,16 @@ bool UndatedDTLMultiModel<REAL>::computeProbability(
                   << " (proba < maxProba)" << std::endl;
     return false; // we haven't sampled any event, this should not happen
   }
-  if (proba > REAL(1.0)) {
-    Logger::error << "error: proba=" << proba << " (proba > 1.0)" << std::endl;
-    return false;
+  // Validity check (see cladeProbaBound): 1 under the ALE convention,
+  // _dupSplitWeight^(n-1) under forward-process weighting.
+  {
+    const double bound = cladeProbaBound(cid);
+    if (proba > REAL(bound)) {
+      Logger::error << "error: proba=" << proba << " (proba > " << bound
+                    << ", the valid bound for this clade under the current "
+                    << "duplication-split weighting)" << std::endl;
+      return false;
+    }
   }
   return true;
 }

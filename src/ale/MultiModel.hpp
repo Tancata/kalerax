@@ -152,9 +152,11 @@ protected:
   const bool _memorySavings;
   ConditionalClades _ccp;
   std::unordered_map<size_t, double> _llCache;
-  // kalerax: set by updateCLV when computeProbability rejects a clade
-  // probability (> 1). The evaluation is then reported as invalid (very low
-  // lnL) so that optimisers reject the trial point instead of aborting.
+  // kalerax: set by updateCLV when computeProbability rejects a clade value
+  // above its valid bound (1 under ALE weighting; dupSplitWeight^(n-1) for an
+  // n-leaf clade under forward-process weighting, see
+  // UndatedDTLMultiModel::cladeProbaBound). The evaluation is then reported as
+  // invalid (very low lnL) so that optimisers reject the trial point.
   bool _invalidCLV = false;
 
   // --- Synteny (Layer 1) state ---

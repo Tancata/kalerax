@@ -146,6 +146,24 @@ per gene tree.
   were about 8% low and transfers about 21% high. With the default, the biases
   are about −1%, +4% and −2%.
 
+**Clade values above 1 are expected**
+
+With the ×2 weights a clade value `P_e(γ)` is no longer bounded by 1. Every D or
+WGD/LORe doubling split in a scenario carries the factor 2, which is the
+labelling factor of the two exchangeable copies. A clade with n leaves has at
+most n − 1 such splits, and the ALE-weighted value is a probability, so a valid
+value satisfies `P_e(γ) ≤ 2^(n−1)`. Values above 1 are typical for a
+well-retained, low-loss WGD. Two retained copies of one gene score about
+`2 · R · R ≈ 2`, because the doubling, unlike a D event, carries no `P_D` cost.
+`computeProbability` therefore checks against this bound
+(`UndatedDTLMultiModel::cladeProbaBound`) rather than against 1. The check stays
+at 1 with `--ale-dup-weights`. Before this change, b959574 rejected such
+evaluations (lnL −1e15), which kept optimisers out of the high-q/low-loss
+region. On 600 snow carp families with 11 declared WGDs, that build ended 97.8
+lnL below the correct optimum, with distorted q. Earlier builds logged
+`proba > 1.0` errors but used the values, which was correct: their per-family
+lnL is bit-identical to the fixed build. Test: `tests/forward_weight_bound_regression.sh`.
+
 **Comparability**
 
 - DTL likelihoods from the two weightings are on different scales; never mix
