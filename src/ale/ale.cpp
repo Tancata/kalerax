@@ -404,29 +404,46 @@ Parameters buildStartingRates(const AleArguments &args,
 }
 
 // --- duplication-weighting checkpoint marker ---
-static double gDupWeight = 2.0;
+// kalerax always uses the forward-process duplication weights (factor 2 on
+// every D and WGD/LORe doubling split) in UndatedDTL and UndatedDL. New
+// checkpoints record "2 dl_and_dtl". Older checkpoints may have used other
+// weights and cannot be resumed with this build:
+//   no marker      -> created before the October 2026 switch (ALE weights);
+//   "1"            -> created with the removed --ale-dup-weights;
+//   "2" (bare)     -> forward weights in UndatedDTL, but UndatedDL still used
+//                     the ALE weights (kalerax before the AleRax v1.4.3 merge).
 static std::string dupMarkerPath(const std::string &ckpDir) {
   return FileSystem::joinPaths(ckpDir, "dup_weighting.txt");
 }
-static bool fileExistsMarker(const std::string &ckpDir) {
-  std::ifstream is(dupMarkerPath(ckpDir));
-  return is.good();
-}
-// missing marker = checkpoint written before the default switch = ALE (1)
-static double readDupWeightMarker(const std::string &ckpDir) {
-  std::ifstream is(dupMarkerPath(ckpDir));
-  double w = 1.0;
-  if (is.good()) {
-    is >> w;
-  }
-  return w;
-}
-static void writeDupWeightMarker(const std::string &ckpDir, double w) {
+static void writeDupWeightMarker(const std::string &ckpDir) {
   if (ParallelContext::getRank() == 0) {
     std::ofstream os(dupMarkerPath(ckpDir));
-    os << w << std::endl;
+    os << "2 dl_and_dtl" << std::endl;
   }
   ParallelContext::barrier();
+}
+static void checkDupWeightMarker(const std::string &ckpDir,
+                                 const std::string &recModel) {
+  std::ifstream is(dupMarkerPath(ckpDir));
+  std::string w, scope;
+  if (is.good()) {
+    is >> w >> scope;
+  }
+  std::string why;
+  if (w.empty()) {
+    why = "it predates the forward-process duplication weights (no marker)";
+  } else if (w != "2") {
+    why = "it was created with --ale-dup-weights";
+  } else if (scope != "dl_and_dtl" && recModel == "UndatedDL") {
+    why = "it is an UndatedDL run from before the AleRax v1.4.3 merge, which "
+          "used the ALE duplication weights in DL";
+  }
+  if (!why.empty()) {
+    Logger::info << "\nError: cannot resume this checkpoint: " << why
+                 << ". Restart the run without the checkpoint, or resume it "
+                 << "with a kalerax build at 0a024d6 or earlier." << std::endl;
+    ParallelContext::abort(1);
+  }
 }
 
 void initCheckpoint(const AleArguments &args, const Families &families,
@@ -732,42 +749,11 @@ void run(AleArguments &args) {
       args.optimizationClassFile, startingRates, !args.fixRates,
       args.optVerbose, args.output);
   speciesTreeOptimizer.getEvaluator().setSummaryOnly(args.summaryOnly);
-  // Duplication/WGD split weighting (UndatedDTL and UndatedDL). Default:
-  // forward-process weights (2, as upstream AleRax since 8e34d87);
-  // --ale-dup-weights: the old ALE/AleRax convention (1). A
-  // resumed run always keeps the weighting it started with (checkpoint
-  // marker); a checkpoint without a marker predates the default switch and
-  // therefore used the ALE weighting.
-  {
-    if (args.aleDupWeights && args.orderedDupWeights) {
-      Logger::info << "\nError: --ale-dup-weights and --ordered-dup-weights "
-                   << "are mutually exclusive" << std::endl;
-      ParallelContext::abort(0);
-    }
-    double dupW = args.aleDupWeights ? 1.0 : 2.0;
-    if (checkpointDetected) {
-      double ckpW = readDupWeightMarker(ckpDir);
-      if (ckpW != dupW) {
-        Logger::info << "Note: resuming a checkpoint created with "
-                     << (ckpW == 1.0 ? "ALE (--ale-dup-weights)"
-                                     : "forward-process")
-                     << " duplication weighting; keeping it"
-                     << (ckpW == 1.0 && !fileExistsMarker(ckpDir)
-                             ? " (checkpoint predates the default switch)"
-                             : "")
-                     << std::endl;
-      }
-      dupW = ckpW;
-    }
-    gDupWeight = dupW;
-    if (args.reconciliationModelStr == "UndatedDTL" ||
-        args.reconciliationModelStr == "UndatedDL") {
-      Logger::timed << "Duplication/WGD split weighting: "
-                    << (dupW == 2.0 ? "forward process (default)"
-                                    : "ALE/AleRax (--ale-dup-weights)")
-                    << std::endl;
-    }
-    speciesTreeOptimizer.getEvaluator().setDupSplitWeight(dupW);
+  // Duplication/WGD split weighting: always the forward process (factor 2,
+  // see UndatedDTLMultiModel::DUP_SPLIT_WEIGHT). A resumed run must have been
+  // started with the same weights.
+  if (checkpointDetected) {
+    checkDupWeightMarker(ckpDir, args.reconciliationModelStr);
   }
   // declare any command-line WGDs on the (now constructed) species tree, or
   // restore those already recovered from the checkpoint on a resumed run
@@ -797,7 +783,7 @@ void run(AleArguments &args) {
   }
   if (!checkpointDetected) {
     initCheckpoint(args, families, ckpDir);
-    writeDupWeightMarker(ckpDir, gDupWeight);
+    writeDupWeightMarker(ckpDir);
     speciesTreeOptimizer.setCurrentStep(AleStep::SpeciesTreeOpt);
     speciesTreeOptimizer.saveCheckpoint();
   }

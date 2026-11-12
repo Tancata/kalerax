@@ -76,16 +76,8 @@ public:
   // retention probability q. No-op for models that do not implement WGD.
   virtual void setWGD(unsigned int /*speciesNode*/, double /*q*/) {}
 
-  // Weight applied to every duplication split (SSD D event and the WGD/LORe
-  // doubling-bracket split) in models that also have transfers. 1 (default)
-  // = the ALE/AleRax undated convention, which counts an unordered D split
-  // once while a T split sums both stay/transfer orderings; 2 = weights that
-  // match the forward process (two exchangeable copies) relative to transfers
-  // (--ordered-dup-weights). No-op for models without transfers (UndatedDL),
-  // where the factor is a per-gene-tree constant.
-  virtual void setDupSplitWeight(double /*w*/) {}
-  // Upper bound on a valid (survival-conditioned) family likelihood; models
-  // with forward-process duplication weights override it.
+  // Upper bound on a valid (survival-conditioned) family likelihood; the
+  // undated models override it (forward-process duplication weights).
   virtual double familyProbaBound() { return 1.0; }
 
   // Set the (global) LORe resolution probability r in [0,1]. r=1 recovers the
@@ -156,8 +148,8 @@ protected:
   ConditionalClades _ccp;
   std::unordered_map<size_t, double> _llCache;
   // kalerax: set by updateCLV when computeProbability rejects a clade value
-  // above its valid bound (1 under ALE weighting; dupSplitWeight^(n-1) for an
-  // n-leaf clade under forward-process weighting, see
+  // above its valid bound (2^(n-1) for an n-leaf clade under the
+  // forward-process duplication weights, see
   // UndatedDTLMultiModel::cladeProbaBound). The evaluation is then reported as
   // invalid (very low lnL) so that optimisers reject the trial point.
   bool _invalidCLV = false;
@@ -589,10 +581,10 @@ template <class REAL> double MultiModel<REAL>::computeLogLikelihood() {
     }
     // condition on survival
     catLh /= getLikelihoodFactor(c); // no need to scale here as factor <= 1.0
-    // check after conditioning. kalerax: the valid bound is 1 under the ALE
-    // convention and w^(genes-1) under forward-process duplication weights
-    // (familyProbaBound); a violation marks the evaluation invalid (as
-    // _invalidCLV) instead of aborting.
+    // check after conditioning. kalerax: with forward-process duplication
+    // weights the valid bound is 2^(genes-1) (familyProbaBound), not 1; a
+    // violation marks the evaluation invalid (as _invalidCLV) instead of
+    // aborting.
     if (catLh > REAL(familyProbaBound())) {
       Logger::error << "error: lh=" << catLh << " (lh > " << familyProbaBound()
                     << ")" << std::endl;

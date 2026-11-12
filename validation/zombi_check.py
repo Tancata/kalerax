@@ -4,11 +4,13 @@ For each config: one Zombi species tree (pure birth, 12 extant species), K
 independent Zombi Gm runs of M root families each (additive transfers to
 contemporaneous lineages, no inversion/transposition/origination). True
 observable D/T = events at internal nodes of the pruned gene trees. kalerax
-(UndatedDTL, PARENTS, --origination ROOT) is fitted with default and
---ordered-dup-weights; exported D/T totals (-g 10, --summary-only) are compared
-with the truth over the families kalerax kept.
+(UndatedDTL, PARENTS, --origination ROOT) is fitted with the forward-process
+weights and, if KALERAX_ALE points to a kalerax build at 0a024d6 or earlier,
+also with the old ALE weights (--ale-dup-weights, removed after 0a024d6);
+exported D/T totals (-g 10, --summary-only) are compared with the truth over
+the families kalerax kept.
 
-usage: ZOMBI_DIR=... KALERAX=... python zombi_check.py <outdir> <tag> D T L [K M]
+usage: ZOMBI_DIR=... KALERAX=... [KALERAX_ALE=...] python zombi_check.py <outdir> <tag> D T L [K M]
 Results (October 2026): validation/zombi_dup_weights.md
 """
 import os, re, shutil, subprocess, sys, json
@@ -18,6 +20,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ZOMBI = os.environ.get("ZOMBI_DIR", os.path.join(HERE, "Zombi"))
 PY = sys.executable
 KALERAX = os.environ.get("KALERAX", os.path.join(HERE, "..", "build", "bin", "kalerax"))
+KALERAX_ALE = os.environ.get("KALERAX_ALE")  # optional: kalerax <= 0a024d6
 
 
 def params(src, dst, subs):
@@ -113,7 +116,7 @@ def main():
 
     def fit(ordered):
         o = os.path.join(wd, f"fit_{int(ordered)}")
-        cmd = [KALERAX, "-f", ff, "-s", os.path.join(wd, "species.nw"), "--rec-model", "UndatedDTL",
+        cmd = [KALERAX if ordered else KALERAX_ALE, "-f", ff, "-s", os.path.join(wd, "species.nw"), "--rec-model", "UndatedDTL",
                "--transfer-constraint", "PARENTS", "--gene-tree-rooting", "UNIFORM", "--origination", "ROOT",
                "--species-tree-search", "SKIP", "--summary-only", "--gene-tree-samples", "10", "--seed", "1", "-p", o]
         if not ordered:
@@ -132,7 +135,7 @@ def main():
         return res
 
     with ThreadPoolExecutor(max_workers=2) as ex:
-        res = list(ex.map(fit, [False, True]))
+        res = list(ex.map(fit, [False, True] if KALERAX_ALE else [True]))
     for r in res:
         r.update(tag=tag, D=float(D), T=float(T), L=float(L),
                  D_err_pct=100 * (r["exported_D"] - r["true_D"]) / r["true_D"],

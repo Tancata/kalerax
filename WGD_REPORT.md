@@ -194,8 +194,8 @@ for genome doubling? We ported the WGD transform into the DTL model and re-ran
 the same analysis (transfers with the realistic `PARENTS` constraint).
 
 > Note (October 2026): the DTL row below was computed with the ALE/AleRax
-> duplication weighting, which is now `--ale-dup-weights`. The default DTL
-> weighting changed (see `DTL_LORE.md`), so a re-run with the current default
+> duplication weighting (`--ale-dup-weights`, available up to 0a024d6). kalerax
+> now always uses the forward-process weights (see `DTL_LORE.md`), so a re-run
 > gives different DTL likelihoods.
 
 | model | null LL | +PPAT LL | q̂[PPAT] | 2·ΔLL | p | detect |

@@ -135,8 +135,6 @@ public:
   // RecPhyloXML, highway candidate tests, CCP binaries); keep the summaries,
   // global totals, wgdSummary, species trees, model parameters and logs.
   bool summaryOnly;
-  bool orderedDupWeights; // deprecated no-op (forward-process weights are the default)
-  bool aleDupWeights;     // --ale-dup-weights: restore ALE/AleRax D vs T weighting
 
   // synteny (Layer 1): per-family <dir>/<family>.syn pair observations
   std::string syntenyDir;

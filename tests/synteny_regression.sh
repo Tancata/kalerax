@@ -68,7 +68,8 @@ awk -v wN=$wN -v wW=$wW -v sS=$sS 'BEGIN{
 read fitW fitN <<< "$(awk '!/^#/{print $1, $2}' $out/reconciliations/syntenySummary.txt)"
 rm -rf "$out/reconciliations"
 ck="$out/checkpoint/mainCheckpoint.txt"
-{ echo 6; tail -n +2 "$ck"; } > "$ck.new" && mv "$ck.new" "$ck"
+# line 1 is the completeness header (upstream b6ae5ee), line 2 the AleStep
+{ head -n 1 "$ck"; echo 6; tail -n +3 "$ck"; } > "$ck.new" && mv "$ck.new" "$ck"
 "$BIN" "${C[@]}" --synteny-dir $d/syn -p $out > $d/resume.log 2>&1 || fail "resumed run"
 grep -q "Checkpoint detected" $d/resume.log || fail "resume did not detect the checkpoint"
 read resW resN <<< "$(awk '!/^#/{print $1, $2}' $out/reconciliations/syntenySummary.txt)"

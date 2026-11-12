@@ -96,7 +96,8 @@ awk -v ra="$raFull" -v rb="$rbFull" 'BEGIN{
 rm -rf "$out/reconciliations"
 ckpt="$out/checkpoint/mainCheckpoint.txt"
 [ -s "$ckpt" ] || fail "no checkpoint written by the initial run"
-{ echo 6; tail -n +2 "$ckpt"; } > "$ckpt.new" && mv "$ckpt.new" "$ckpt"
+# line 1 is the completeness header (upstream b6ae5ee), line 2 the AleStep
+{ head -n 1 "$ckpt"; echo 6; tail -n +3 "$ckpt"; } > "$ckpt.new" && mv "$ckpt.new" "$ckpt"
 
 echo "=== resume from checkpoint at step Reconciliation ==="
 "$BIN" "${common[@]}" > "$out.resume.log" 2>&1 || fail "resumed run exited non-zero"

@@ -21,7 +21,9 @@ Run as `ZOMBI_DIR=/path/to/Zombi KALERAX=build/bin/kalerax python3 validation/zo
   gene trees, i.e. the observable events.
 - **Fits:** kalerax UndatedDTL with PARENTS, UNIFORM gene-tree rooting and ROOT
   origination, `--summary-only -g 10`, run with the default weighting and with
-  `--ale-dup-weights`. Exported duplication and transfer totals
+  `--ale-dup-weights` (October 2026; the option was removed after 0a024d6, so
+  re-running the ALE arm needs `KALERAX_ALE` pointing to a build at 0a024d6 or
+  earlier). Exported duplication and transfer totals
   (`totalSpeciesEventCounts.txt`) are compared with the truth over the families
   kalerax kept (≥4 species).
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Regression gate for the UndatedDTL duplication weighting (default = forward
-process; --ale-dup-weights = ALE/AleRax convention).
+"""Regression gate for the UndatedDTL duplication weighting (forward-process
+weights: factor 2 on every D and WGD/LORe doubling split).
 
 Forward-simulates gene families (scripts/kalerax_sim.py) under two UndatedDTL
 parameter sets that differ only in the transfer rate, collapses every family
@@ -8,12 +8,12 @@ with 3-6 genes to its unrooted species-labelled shape, and scores one
 representative per frequent shape with kalerax at FIXED rates
 (--fix-rates, per_fam_likelihoods.txt). For an exact likelihood (up to a
 parameter-independent per-tree constant) the ratio X = freq(shape)/L(shape)
-must be the same under both parameter sets. With the default (forward-process)
-weighting this holds (chi2/df ~ 1); with --ale-dup-weights it does not, because a
-duplication split is counted once while a transfer split sums both orderings.
+must be the same under both parameter sets (chi2 ~ df). The removed ALE
+weighting (each D split counted once while a T split sums both orderings;
+kalerax <= 0a024d6, --ale-dup-weights) failed this test (chi2/df > 4).
 
 usage: dtl_dup_weight_concordance.py <kalerax> <workdir> [N]
-exit 0 = PASS (default concordant AND --ale-dup-weights discordant), 1 = FAIL
+exit 0 = PASS (forward weights not rejected, chi2 p > 1e-3, >= 20 shapes), 1 = FAIL
 """
 import itertools, os, subprocess, sys
 from collections import Counter, defaultdict
@@ -82,21 +82,19 @@ def run(kalerax, wd, N):
             open(m, "w").write("".join(f"{g}\t{s}\n" for g, s in f["mapping"]))
             lines += [f"- s{i}", f"gene_tree = {t}", f"mapping = {m}"]
         ff = os.path.join(wd, f"{tag}.txt"); open(ff, "w").write("\n".join(lines) + "\n")
-        for flag in (False, True):
+        for flag in (True,):
             out = os.path.join(wd, f"out_{tag}_{int(flag)}")
             cmd = [kalerax, "-f", ff, "-s", sp, "--rec-model", "UndatedDTL", "--transfer-constraint", "PARENTS",
                    "--gene-tree-rooting", "UNIFORM", "--species-tree-search", "SKIP", "--summary-only",
                    "--gene-tree-samples", "0", "--fix-rates", "--d", str(D), "--l", str(L), "--t", str(T),
                    "--min-covered-species", "1", "--skip-family-filtering", "--seed", "1", "-p", out]
-            if not flag:
-                cmd.append("--ale-dup-weights")
             subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
             ll = dict(l.split() for l in open(os.path.join(out, "per_fam_likelihoods.txt")) if l.strip())
             for i, k in enumerate(top):
                 if f"s{i}" in ll:
                     X.setdefault((flag, k), {})[tag] = (freq[k] / N / np.exp(float(ll[f"s{i}"])), freq[k])
     res = {}
-    for flag in (False, True):
+    for flag in (True,):
         z = [np.log(v["highT"][0] / v["lowT"][0]) / np.sqrt(1 / v["highT"][1] + 1 / v["lowT"][1])
              for (fl, k), v in X.items() if fl == flag and len(v) == 2]
         res[flag] = (float(np.sum(np.square(z))), len(z))
@@ -107,10 +105,11 @@ if __name__ == "__main__":
     kalerax, wd = sys.argv[1], sys.argv[2]
     N = int(sys.argv[3]) if len(sys.argv) > 3 else 600000
     res = run(kalerax, wd, N)
-    (c0, n0), (c1, n1) = res[False], res[True]
-    print(f"  --ale-dup-weights:              chi2 = {c0:.1f} on {n0} shapes")
-    print(f"  default (forward-process):      chi2 = {c1:.1f} on {n1} shapes")
-    ok = n1 >= 20 and c1 / n1 < 1.8 and c0 / n0 > 4.0
-    print("PASS: default duplication weights are concordant with forward simulation"
+    from scipy.stats import chi2 as chi2d
+    c1, n1 = res[True]
+    p1 = chi2d.sf(c1, n1)
+    print(f"  forward-process weights: chi2 = {c1:.1f} on {n1} shapes (p = {p1:.2g})")
+    ok = n1 >= 20 and p1 > 1e-3
+    print("PASS: UndatedDTL duplication weights concordant with forward simulation"
           if ok else "FAIL: dup-weight concordance")
     sys.exit(0 if ok else 1)

@@ -31,15 +31,6 @@ public:
     this->resetCache();
   }
 
-  // Duplication-split weight (D event and WGD/LORe doubling-bracket split).
-  // Default 2 (forward process; upstream AleRax 8e34d87 uses 2 for D);
-  // --ale-dup-weights sets 1 (old ALE/AleRax convention).
-  void setDupSplitWeight(double w) override {
-    _dupSplitWeight = w;
-    this->invalidateAllSpeciesNodes();
-    this->resetCache();
-  }
-
   // --- LORe extension ---
   // Set the resolution probability r in [0,1] on EVERY species branch (the
   // phase-1 global-r behaviour). r = 1 recovers the WHALE/AORe model.
@@ -147,19 +138,21 @@ private:
   std::vector<DLCLV> _uclvs;       // unresolved (tetrasomic) CLV, per clade per (e,cat)
   std::vector<REAL> _uEU;          // unresolved extinction, per (e,cat)
   std::vector<double> _resolutionProbs; // per species branch: r in [0,1]; 1==AORe
-  double _dupSplitWeight = 1.0; // set by setDupSplitWeight (default run: 2)
-  // Valid upper bound on a clade value: 1 under the ALE convention; with
-  // forward-process weights every D / doubling split carries the labelling
-  // factor _dupSplitWeight, and an n-leaf clade has at most n-1 such splits,
-  // so P_e(gamma) <= _dupSplitWeight^(n-1). See UndatedDTLMultiModel.
+  // Duplication-split weight: every D split and WGD/LORe doubling-bracket
+  // split is weighted 2, because the two copies are exchangeable (either copy
+  // can found either subclade, as the S and T terms count both orientations
+  // of a split). Upstream AleRax uses the same factor for D since 8e34d87.
+  // The factor is the labelling factor of the two copies, so clade values are
+  // not bounded by 1: an n-leaf clade has at most n-1 such splits and its
+  // value under the old ALE weights (each split once) is a probability, so a
+  // valid value satisfies P_e(gamma) <= 2^(n-1). A well-retained, low-loss
+  // WGD makes this common (a retained cherry scores ~2*R*R ~ 2).
+  static constexpr double DUP_SPLIT_WEIGHT = 2.0;
   double cladeProbaBound(CID cid) {
-    if (_dupSplitWeight == 1.0) {
-      return 1.0;
-    }
     if (_cladeLeafCount.size() != this->_ccp.getCladesNumber()) {
       _cladeLeafCount.assign(this->_ccp.getCladesNumber(), 0);
     }
-    return std::pow(_dupSplitWeight,
+    return std::pow(DUP_SPLIT_WEIGHT,
                     static_cast<double>(cladeLeafCount(cid)) - 1.0);
   }
   unsigned int cladeLeafCount(CID cid) {
@@ -176,16 +169,14 @@ private:
   }
   std::vector<unsigned int> _cladeLeafCount; // lazily filled, per CID
   double familyProbaBound() override {
-    return _dupSplitWeight == 1.0
-               ? 1.0
-               : std::pow(_dupSplitWeight,
-                          static_cast<double>(this->_ccp.getLeafNumber()) - 1.0);
+    return std::pow(DUP_SPLIT_WEIGHT,
+                    static_cast<double>(this->_ccp.getLeafNumber()) - 1.0);
   }
 
   // Doubling bracket shared by the WGD and LORe transforms:
-  //   2*E*R + w * sum_splits ccp * R_left * R_right   (no _PD, no q/r),
-  // w = _dupSplitWeight (2 by default: the two copies are exchangeable, as for
-  // a D split; 1 with --ale-dup-weights).
+  //   2*E*R + 2 * sum_splits ccp * R_left * R_right   (no _PD, no q/r);
+  // the split factor 2 is DUP_SPLIT_WEIGHT (two exchangeable copies, as for a
+  // D split).
   // Reads R (=_dlclvs) and E (=_uE) at node-cat ec; _dlclvs[cid][ec] must
   // already hold R for this clade (set just before this is called in updateCLV).
   REAL dupBracket(unsigned int cid, unsigned int ec) {
@@ -195,7 +186,7 @@ private:
       const auto &cs = splits[k];
       // WGD split: synteny-weighted frequency (== ccp frequency without synteny)
       REAL t = _dlclvs[cs.left][ec] * _dlclvs[cs.right][ec] *
-               this->synWgdFreq(cid, k, cs.frequency) * _dupSplitWeight;
+               this->synWgdFreq(cid, k, cs.frequency) * DUP_SPLIT_WEIGHT;
       scale(t);
       applySynScale(t, this->synScaleW(cid, k));
       split += t;
@@ -654,11 +645,10 @@ bool UndatedDLMultiModel<REAL>::computeProbability(
         return true;
       }
     }
-    // - D event (times _dupSplitWeight = 2 by default: either copy can found
-    // either subclade, as the S term counts both orientations of the split;
-    // upstream AleRax 8e34d87. --ale-dup-weights sets it to 1.)
-    temp = _dlclvs[cidLeft][ec] * _dlclvs[cidRight][ec] *
-           (_PD[ec] * freq * _dupSplitWeight);
+    // - D event (times 2: either copy can found either subclade, as the S
+    // term counts both orientations of the split)
+    temp =
+        _dlclvs[cidLeft][ec] * _dlclvs[cidRight][ec] * (2.0 * _PD[ec] * freq);
     scale(temp);
     applySynScale(temp, synS);
     proba += temp;
@@ -950,7 +940,7 @@ bool UndatedDLMultiModel<REAL>::sampleUEventImpl(CID cid, corax_rnode_t *sp,
     for (size_t k = 0; k < splits.size(); ++k) {
       const auto &cs = splits[k];
       REAL t = _dlclvs[cs.left][ec] * _dlclvs[cs.right][ec] *
-               this->synWgdFreq(cid, k, cs.frequency) * _dupSplitWeight;
+               this->synWgdFreq(cid, k, cs.frequency) * DUP_SPLIT_WEIGHT;
       scale(t);
       applySynScale(t, this->synScaleW(cid, k));
       dAcc = dAcc + t;

@@ -104,107 +104,106 @@ kalerax -f families.txt -s species_tree.nw --rec-model UndatedDTL \
   the LORe signal.
 - Like the rest of the WGD/LORe code, this is a research prototype.
 
-## Duplication vs transfer weighting (default since October 2026; `--ale-dup-weights`)
+## Duplication-split weighting (forward process; fixed)
 
-The undated DTL recursion inherited from ALE/AleRax weights a duplication split,
+The undated recursion inherited from ALE/AleRax weighted a duplication split,
 and the WGD / LORe doubling-bracket split, once per *unordered* pair of child
-clades (`P_D · R(γ′) · R(γ″)`). A transfer split, by contrast, sums both
-assignments of the children to the "stays" and "is transferred" copies
-(`P_T · [R_e(γ′) T(γ″) + R_e(γ″) T(γ′)]`). Under the forward process, where a
-duplication or WGD produces two exchangeable copies, each D or WGD node
-therefore received half the weight of a T node.
+clades (`P_D · R(γ′) · R(γ″)`). Speciation and transfer splits, by contrast,
+sum both orientations of the split (`P_T · [R_e(γ′) T(γ″) + R_e(γ″) T(γ′)]`).
+Under the forward process a duplication or WGD produces two exchangeable
+copies, either of which can found either subclade, so every reconciliation was
+weighted by 2^-(number of duplication splits) relative to the model.
 
-**Default (UndatedDTL):** every duplication split is now weighted ×2. This covers
-the D event and the doubling-bracket split used by the WGD transform, LORe
-resolution and the U-state sampler. The likelihood, the reconciliation backtrace
-and the LORe resolution sampler all use the same weights.
+**kalerax weights every duplication split ×2, in UndatedDTL and UndatedDL.**
+This covers the D event and the doubling-bracket split used by the WGD
+transform, LORe resolution and the U-state sampler; the likelihood, the
+reconciliation backtrace and the samplers use the same weights. The factor is
+a fixed constant (`DUP_SPLIT_WEIGHT` in the undated models), and the D term is
+written exactly as in upstream AleRax, which adopted the same factor in 8e34d87
+(its check: summing the recursion over every labelled rooted gene tree on one
+branch gives k!·P(N = k), where before it gave 2^-(k-1) times that).
 
-**`--ale-dup-weights`** restores the old ALE/AleRax numerics, e.g. to reproduce
-older runs. `--ordered-dup-weights` (the opt-in flag of commit 5add0d8) is still
-accepted and is now the default.
+**History.** UndatedDTL switched to these weights in October 2026 (3f6a5ff),
+with `--ale-dup-weights` to restore the old numerics. UndatedDL followed in
+November 2026 with the AleRax v1.4.3 merge (0a024d6). The option was then
+removed: **0a024d6 is the last build with `--ale-dup-weights`**, so build that
+commit (or earlier) to reproduce ALE-weighted results. `--ordered-dup-weights`
+(the opt-in flag of 5add0d8) is still accepted as a no-op; `--ale-dup-weights`
+now stops with an explanation.
 
-**UndatedDL (since the AleRax v1.4.3 merge, November 2026).** Upstream AleRax
-adopted the same factor 2 for the D split in both models (8e34d87). Its check:
-summing the recursion over every labelled rooted gene tree on one branch gives
-k!·P(N = k), where before it gave 2^-(k-1) times that. kalerax now applies the
-weight in UndatedDL as well, to the D split and to the WGD/LORe doubling-bracket
-split, and `--ale-dup-weights` restores 1 in both models. An earlier version of
-this document said DL was unaffected because "the factor is a constant per gene
-tree". That is true on a single branch but not on a species tree: one gene tree
-can be reconciled with different numbers of duplication splits (e.g. S versus D
-followed by two SL). Measured on 291 acipenseriform families, the per-family
-difference between the two weightings changes by up to 0.53 lnL between D = 0.05
-and D = 0.5, and by up to 0.22 between WGD q = 0.2 and q = 0.9.
-`tests/dl_dup_weight_concordance.py` (8,000,000 simulated families per
-parameter set) confirms the factor:
-
-| pair | `--ale-dup-weights` | default (forward) |
-|---|---|---|
-| D 0.15 vs 0.90 (L 0.60) | χ² 332.2 / 211 shapes, p = 2e-7 | χ² 185.4 / 211, p = 0.90 |
-| WGD q 0.2 vs 0.95 | χ² 600.6 / 281 shapes, p = 3e-25 | χ² 270.1 / 281, p = 0.67 |
-
-**UndatedDL results from kalerax builds before this merge used the ALE
-weighting and are not comparable** (re-run, or use `--ale-dup-weights` to
-reproduce them; those reproduce bit-identically).
+An earlier version of this document said UndatedDL was unaffected because "the
+factor is a constant per gene tree". That holds on a single branch but not on a
+species tree, where one gene tree can be reconciled with different numbers of
+duplication splits (e.g. S versus D followed by two SL). On 291 acipenseriform
+families, the per-family difference between the two weightings changed by up to
+0.53 lnL between D = 0.05 and D = 0.5, and by up to 0.22 between WGD q = 0.2 and
+q = 0.9.
 
 **Evidence**
 
-- **Concordance with my own forward simulator.** `scripts/kalerax_sim.py`
-  mirrors these recursions. Its DL (+WGD AORe/LORe) shape probabilities match
-  kalerax exactly. DTL matches only with the ×2 weights: with the default, two
-  parameter sets that differ only in T give the same frequency/likelihood ratio
-  for every gene-tree shape (χ² ≈ the number of shapes); with
-  `--ale-dup-weights` they do not.
+- **Forward-simulation concordance, UndatedDTL** (`tests/dtl_dup_weight_concordance.py`).
+  `scripts/kalerax_sim.py` simulates families under two parameter sets that
+  differ only in T; for an exact likelihood the frequency/likelihood ratio of
+  every gene-tree shape must be the same under both (χ² ≈ number of shapes).
+  The forward weights pass; the ALE weights failed (χ²/df > 4).
+- **Forward-simulation concordance, UndatedDL** (`tests/dl_dup_weight_concordance.py`,
+  8,000,000 simulated families per parameter set):
+
+  | pair | ALE weights (≤ 0a024d6) | forward weights |
+  |---|---|---|
+  | D 0.15 vs 0.90 (L 0.60) | χ² 332.2 / 211 shapes, p = 2e-7 | χ² 185.4 / 211, p = 0.90 |
+  | WGD q 0.2 vs 0.95 | χ² 600.6 / 281 shapes, p = 3e-25 | χ² 270.1 / 281, p = 0.67 |
+
+  The DL test needs this many families: at 600,000 neither weighting was
+  rejected.
 - **Independent check with Zombi** (Davín et al. 2020, a dated forward
   simulator with additive transfers to contemporaneous lineages; 12 species,
   4,200 simulated families per configuration of which 2,200–3,100 pass the
   ≥4-species filter; transfer rate varied). Exported D and T event totals were
   compared with Zombi's true observable events. The ALE weighting under-counted
-  D by 11–17% and over-counted T by 13–42% in every configuration; with the
-  default, D was within −2% to +4% and T within +2% to +13%. The numbers are in
+  D by 11–17% and over-counted T by 13–42% in every configuration; the forward
+  weights gave D within −2% to +4% and T within +2% to +13%. The numbers are in
   `validation/zombi_dup_weights.md`.
-- **Effect in simulations on an 11-taxon tree** (2000 families per replicate).
-  ALE weighting gave D̂ −5%, T̂ +13% and q̂ about −5%; exported WGD splits
-  were about 8% low and transfers about 21% high. With the default, the biases
-  are about −1%, +4% and −2%.
+- **Effect in simulations on an 11-taxon tree** (2000 families per replicate,
+  UndatedDTL). ALE weighting gave D̂ −5%, T̂ +13% and q̂ about −5%; exported WGD
+  splits were about 8% low and transfers about 21% high. With the forward
+  weights the biases are about −1%, +4% and −2%.
 
 **Clade values above 1 are expected**
 
 With the ×2 weights a clade value `P_e(γ)` is no longer bounded by 1. Every D or
 WGD/LORe doubling split in a scenario carries the factor 2, which is the
 labelling factor of the two exchangeable copies. A clade with n leaves has at
-most n − 1 such splits, and the ALE-weighted value is a probability, so a valid
-value satisfies `P_e(γ) ≤ 2^(n−1)`. Values above 1 are typical for a
-well-retained, low-loss WGD. Two retained copies of one gene score about
+most n − 1 such splits, and its value under the old weights is a probability,
+so a valid value satisfies `P_e(γ) ≤ 2^(n−1)`; a survival-conditioned family
+likelihood likewise satisfies `≤ 2^(genes−1)`. Values above 1 are typical for a
+well-retained, low-loss WGD: two retained copies of one gene score about
 `2 · R · R ≈ 2`, because the doubling, unlike a D event, carries no `P_D` cost.
-`computeProbability` therefore checks against this bound
-(`UndatedDTLMultiModel::cladeProbaBound`) rather than against 1. The check stays
-at 1 with `--ale-dup-weights`. Before this change, b959574 rejected such
-evaluations (lnL −1e15), which kept optimisers out of the high-q/low-loss
-region. On 600 snow carp families with 11 declared WGDs, that build ended 97.8
-lnL below the correct optimum, with distorted q. Earlier builds logged
-`proba > 1.0` errors but used the values, which was correct: their per-family
-lnL is bit-identical to the fixed build. Test: `tests/forward_weight_bound_regression.sh`.
+`computeProbability` and `computeLogLikelihood` therefore check against these
+bounds (`cladeProbaBound`, `familyProbaBound`) rather than against 1; a value
+beyond the bound marks the evaluation invalid (lnL −1e15). b959574 instead
+rejected every value above 1, which kept optimisers out of the
+high-q/low-loss region: on 600 snow carp families with 11 declared WGDs that
+build ended 97.8 lnL below the correct optimum, with distorted q. Builds that
+logged `proba > 1.0` errors but used the values were correct: their per-family
+lnL is bit-identical to the fixed build. Test:
+`tests/forward_weight_bound_regression.sh`.
 
-**Comparability**
+**Comparability and checkpoints**
 
-- DTL likelihoods from the two weightings are on different scales; never mix
-  them in one LRT.
-- **DTL results produced before this change used the ALE weighting and should be
-  re-run** (or reproduced with `--ale-dup-weights`).
-- The weighting is written to the log and to
-  `model_parameters/dup_weighting.txt` (`forward_process 2` or `ale 1`) for
-  UndatedDTL and UndatedDL. It is also stored in the checkpoint: a resumed run
-  always keeps the weighting it started with, and a checkpoint without a marker
-  (created before the switch) resumes with the ALE weighting. Caveat: an
-  UndatedDL checkpoint written before the v1.4.3 merge carries the marker `2`
-  although DL then ran with weight 1, so it would resume with the new weight;
-  restart such runs rather than resuming them.
+- Likelihoods under the two weightings are on different scales; never mix them
+  in one LRT. **Results from kalerax UndatedDTL before 3f6a5ff (October 2026)
+  and UndatedDL before 0a024d6 used the ALE weights** and should be re-run.
+- New checkpoints record `2 dl_and_dtl` in `checkpoint/dup_weighting.txt`. A
+  checkpoint that used other weights is refused on resume with an explanation:
+  no marker (created before October 2026), `1` (`--ale-dup-weights`), or a bare
+  `2` from an UndatedDL run (DL before the v1.4.3 merge still used the ALE
+  weights). Restart such runs, or resume them with a build at 0a024d6 or earlier.
 
-**Tests:** `tests/dtl_dup_weight_regression.sh` checks that DL uses the weighting, the labels,
-the checkpoint marker and the pre-switch resume, then runs the forward-simulation
-concordance gate. `tests/export_consistency.sh` includes DTL configurations at
-both weights.
+**Tests:** `tests/dup_weight_regression.sh` checks the option handling, the
+checkpoint marker and the refused resumes, then runs both concordance gates.
+`tests/export_consistency.sh` checks that sampled scenarios match the exact
+posterior in DL and DTL.
 
 ## Resolved issue: exported scenarios ignored the WGD (October 2026)
 
