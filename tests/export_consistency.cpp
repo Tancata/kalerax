@@ -69,7 +69,7 @@ static int run(MODEL &model, PLLRootedTree &speciesTree, const std::string &tA,
     }
   }
   model.setResolutionProbVector(rv);
-  model.setDupSplitWeight(dupW); // --ordered-dup-weights (DTL only)
+  model.setDupSplitWeight(dupW); // forward-process (2) or ALE (1) dup weights
   model.setSynteny(syn);
   // with only y=1 pairs marked (others NA) the identity holds for any
   // sigmaW >= sigmaN; sigmaW == sigmaN is the plain (unweighted) model

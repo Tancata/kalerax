@@ -25,7 +25,7 @@
 #include "AleOptimizer.hpp"
 #include "TrimFamilies.hpp"
 
-const char *version = "kalerax v1.4.2 (WGD/LORe fork of AleRax v1.4.2)";
+const char *version = "kalerax v1.4.3 (WGD/LORe fork of AleRax v1.4.3)";
 
 /**
  *  Create AleRax top directories
@@ -371,7 +371,7 @@ RecModelInfo buildRecModelInfo(const AleArguments &args) {
       false, // mad rooting (option specific to GeneRax)
       -1.0,  // branch length threshold
       args.transferConstraint, args.noDup, args.noDL, args.noTL,
-      args.fractionMissingFile, args.memorySavings);
+      args.fractionMissingFile, args.memorySavings, args.fixedPointIterations);
 }
 
 Parameters buildStartingRates(const AleArguments &args,
@@ -732,8 +732,9 @@ void run(AleArguments &args) {
       args.optimizationClassFile, startingRates, !args.fixRates,
       args.optVerbose, args.output);
   speciesTreeOptimizer.getEvaluator().setSummaryOnly(args.summaryOnly);
-  // Duplication vs transfer split weighting (UndatedDTL). Default: forward-
-  // process weights (2); --ale-dup-weights: ALE/AleRax convention (1). A
+  // Duplication/WGD split weighting (UndatedDTL and UndatedDL). Default:
+  // forward-process weights (2, as upstream AleRax since 8e34d87);
+  // --ale-dup-weights: the old ALE/AleRax convention (1). A
   // resumed run always keeps the weighting it started with (checkpoint
   // marker); a checkpoint without a marker predates the default switch and
   // therefore used the ALE weighting.
@@ -759,8 +760,9 @@ void run(AleArguments &args) {
       dupW = ckpW;
     }
     gDupWeight = dupW;
-    if (args.reconciliationModelStr == "UndatedDTL") {
-      Logger::timed << "Duplication/WGD vs transfer split weighting: "
+    if (args.reconciliationModelStr == "UndatedDTL" ||
+        args.reconciliationModelStr == "UndatedDL") {
+      Logger::timed << "Duplication/WGD split weighting: "
                     << (dupW == 2.0 ? "forward process (default)"
                                     : "ALE/AleRax (--ale-dup-weights)")
                     << std::endl;

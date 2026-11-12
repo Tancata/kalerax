@@ -84,6 +84,9 @@ public:
   // (--ordered-dup-weights). No-op for models without transfers (UndatedDL),
   // where the factor is a per-gene-tree constant.
   virtual void setDupSplitWeight(double /*w*/) {}
+  // Upper bound on a valid (survival-conditioned) family likelihood; models
+  // with forward-process duplication weights override it.
+  virtual double familyProbaBound() { return 1.0; }
 
   // Set the (global) LORe resolution probability r in [0,1]. r=1 recovers the
   // immediate-resolution (WHALE/AORe) WGD model. No-op for models without LORe.
@@ -570,30 +573,41 @@ template <class REAL> double MultiModel<REAL>::computeLogLikelihood() {
   this->_invalidCLV = false;
   updateCLVs();
   if (this->_invalidCLV) {
-    // invalid region of parameter space (clade probability > 1): not cached
+    // invalid region of parameter space (clade value above its bound): not cached
     if (this->_memorySavings) {
       deallocateMemory();
     }
     return -1e15;
   }
   // compute the species tree LL
-  REAL res = REAL();
-  std::vector<REAL> categoryLikelihoods(getGammaCatNumber(), REAL());
+  REAL lh = REAL();
   for (unsigned int c = 0; c < getGammaCatNumber(); ++c) {
+    REAL catLh = REAL();
+    // sum over all possible origination species
     for (auto speciesNode : this->getPrunedSpeciesNodes()) {
-      categoryLikelihoods[c] += getRootCladeLikelihood(speciesNode, c);
+      catLh += getRootCladeLikelihood(speciesNode, c);
     }
     // condition on survival
-    categoryLikelihoods[c] /=
-        getLikelihoodFactor(c); // no need to scale here as factor <= 1.0
+    catLh /= getLikelihoodFactor(c); // no need to scale here as factor <= 1.0
+    // check after conditioning. kalerax: the valid bound is 1 under the ALE
+    // convention and w^(genes-1) under forward-process duplication weights
+    // (familyProbaBound); a violation marks the evaluation invalid (as
+    // _invalidCLV) instead of aborting.
+    if (catLh > REAL(familyProbaBound())) {
+      Logger::error << "error: lh=" << catLh << " (lh > " << familyProbaBound()
+                    << ")" << std::endl;
+      if (this->_memorySavings) {
+        deallocateMemory();
+      }
+      return -1e15;
+    }
+    // add the category likelihood
+    lh += catLh;
   }
-  // sum over the categories
-  res = std::accumulate(categoryLikelihoods.begin(), categoryLikelihoods.end(),
-                        REAL());
   // normalize by the number of categories
-  res /= static_cast<double>(getGammaCatNumber());
-  scale(res);
-  auto ll = getLog(res);
+  lh /= static_cast<double>(getGammaCatNumber());
+  scale(lh);
+  auto ll = getCheckedLog(lh);
   // remember the computed LL for this species tree
   this->_llCache[hash] = ll;
   if (this->_memorySavings) {

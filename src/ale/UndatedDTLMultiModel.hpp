@@ -174,6 +174,12 @@ private:
     return n;
   }
   std::vector<unsigned int> _cladeLeafCount; // lazily filled, per CID
+  double familyProbaBound() override {
+    return _dupSplitWeight == 1.0
+               ? 1.0
+               : std::pow(_dupSplitWeight,
+                          static_cast<double>(this->_ccp.getLeafNumber()) - 1.0);
+  }
   // resolution-backtrace: number of lineages abandoned at the resample cap (a
   // degenerate cell where only DL/TL "nothing observed" events have mass).
   size_t _btCapHits = 0;
@@ -408,7 +414,7 @@ template <class REAL> void UndatedDTLMultiModel<REAL>::allocateMemory() {
  *  Free memory allocated to the CLVs
  */
 template <class REAL> void UndatedDTLMultiModel<REAL>::deallocateMemory() {
-  _dtlclvs = std::vector<DTLCLV>();
+  std::vector<DTLCLV>().swap(_dtlclvs);
 }
 
 /**
@@ -425,7 +431,7 @@ template <class REAL> void UndatedDTLMultiModel<REAL>::updateCLV(CID cid) {
   std::fill(uu.begin(), uu.end(), REAL());
   // iterate several times to resolve the DL and TL terms with
   // fixed point optimization: not needed if we don't model TL
-  unsigned int maxIt = this->_info.noTL ? 1 : 4;
+  unsigned int maxIt = this->_info.noTL ? 1 : this->_info.fixedPointIterations;
   for (unsigned int it = 0; it < maxIt; ++it) {
     bool ok;
     for (unsigned int c = 0; c < _gammaCatNumber; ++c) {
@@ -656,7 +662,7 @@ void UndatedDTLMultiModel<REAL>::recomputeSpeciesProbabilities() {
   std::fill(_uEU.begin(), _uEU.end(), REAL());
   // iterate several times to resolve _uE and _tE probas with
   // fixed point optimization
-  unsigned int maxIt = 4;
+  unsigned int maxIt = this->_info.fixedPointIterations;
   for (unsigned int it = 0; it < maxIt; ++it) {
     for (unsigned int c = 0; c < _gammaCatNumber; ++c) {
       REAL extinctionSum = REAL();
@@ -701,7 +707,11 @@ void UndatedDTLMultiModel<REAL>::recomputeSpeciesProbabilities() {
           scale(temp);
           proba += temp;
         }
-        assert(proba < REAL(1.000001));
+        // check proba
+        if (proba > REAL(1.0)) {
+          assert(proba < REAL(1.000001));
+          proba = REAL(1.0);
+        }
         extinctionSum += proba;
         _uE[ec] = proba;
         // --- LORe: unresolved (tetrasomic) extinction EU (vertical-only) ---
@@ -870,7 +880,7 @@ bool UndatedDTLMultiModel<REAL>::computeProbability(
     // - S event on a terminal species branch (only for compatible genes and
     // species)
     if (isSpeciesLeaf && this->_geneToSpecies[cid] == e) {
-      temp = REAL(_PS[ec]);
+      temp = REAL(_PS[ec] * (1.0 - this->_fm[e])); // S and observed scenario
       scale(temp);
       proba += temp;
       if (recCell && proba > maxProba) {
@@ -916,7 +926,10 @@ bool UndatedDTLMultiModel<REAL>::computeProbability(
         return true;
       }
     }
-    // - D event
+    // - D event (times _dupSplitWeight = 2 by default: either copy can found
+    // either subclade, as the S and T terms count both orientations of the
+    // split; upstream AleRax 8e34d87 hard-codes the same factor 2.
+    // --ale-dup-weights sets it to 1.)
     temp = _dtlclvs[cidLeft]._uq[ec] * _dtlclvs[cidRight]._uq[ec] *
            (_PD[ec] * freq * _dupSplitWeight);
     scale(temp);

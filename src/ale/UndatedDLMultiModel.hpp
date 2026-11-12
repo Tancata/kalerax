@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cmath>
+
 #include <cstdlib> // std::abort for the always-on LORe consistency guard
 
 #include "MultiModel.hpp"
@@ -25,6 +27,15 @@ public:
   void setWGD(unsigned int e, double q) override {
     _hasWGD[e] = 1;
     _q[e] = q;
+    this->invalidateAllSpeciesNodes();
+    this->resetCache();
+  }
+
+  // Duplication-split weight (D event and WGD/LORe doubling-bracket split).
+  // Default 2 (forward process; upstream AleRax 8e34d87 uses 2 for D);
+  // --ale-dup-weights sets 1 (old ALE/AleRax convention).
+  void setDupSplitWeight(double w) override {
+    _dupSplitWeight = w;
     this->invalidateAllSpeciesNodes();
     this->resetCache();
   }
@@ -136,9 +147,45 @@ private:
   std::vector<DLCLV> _uclvs;       // unresolved (tetrasomic) CLV, per clade per (e,cat)
   std::vector<REAL> _uEU;          // unresolved extinction, per (e,cat)
   std::vector<double> _resolutionProbs; // per species branch: r in [0,1]; 1==AORe
+  double _dupSplitWeight = 1.0; // set by setDupSplitWeight (default run: 2)
+  // Valid upper bound on a clade value: 1 under the ALE convention; with
+  // forward-process weights every D / doubling split carries the labelling
+  // factor _dupSplitWeight, and an n-leaf clade has at most n-1 such splits,
+  // so P_e(gamma) <= _dupSplitWeight^(n-1). See UndatedDTLMultiModel.
+  double cladeProbaBound(CID cid) {
+    if (_dupSplitWeight == 1.0) {
+      return 1.0;
+    }
+    if (_cladeLeafCount.size() != this->_ccp.getCladesNumber()) {
+      _cladeLeafCount.assign(this->_ccp.getCladesNumber(), 0);
+    }
+    return std::pow(_dupSplitWeight,
+                    static_cast<double>(cladeLeafCount(cid)) - 1.0);
+  }
+  unsigned int cladeLeafCount(CID cid) {
+    auto &n = _cladeLeafCount[cid];
+    if (n == 0) {
+      if (this->_ccp.isLeaf(cid)) {
+        n = 1;
+      } else {
+        const auto &cs = this->_ccp.getCladeSplits(cid).front();
+        n = cladeLeafCount(cs.left) + cladeLeafCount(cs.right);
+      }
+    }
+    return n;
+  }
+  std::vector<unsigned int> _cladeLeafCount; // lazily filled, per CID
+  double familyProbaBound() override {
+    return _dupSplitWeight == 1.0
+               ? 1.0
+               : std::pow(_dupSplitWeight,
+                          static_cast<double>(this->_ccp.getLeafNumber()) - 1.0);
+  }
 
   // Doubling bracket shared by the WGD and LORe transforms:
-  //   2*E*R + sum_splits ccp * R_left * R_right   (no _PD, no q/r weighting).
+  //   2*E*R + w * sum_splits ccp * R_left * R_right   (no _PD, no q/r),
+  // w = _dupSplitWeight (2 by default: the two copies are exchangeable, as for
+  // a D split; 1 with --ale-dup-weights).
   // Reads R (=_dlclvs) and E (=_uE) at node-cat ec; _dlclvs[cid][ec] must
   // already hold R for this clade (set just before this is called in updateCLV).
   REAL dupBracket(unsigned int cid, unsigned int ec) {
@@ -148,7 +195,7 @@ private:
       const auto &cs = splits[k];
       // WGD split: synteny-weighted frequency (== ccp frequency without synteny)
       REAL t = _dlclvs[cs.left][ec] * _dlclvs[cs.right][ec] *
-               this->synWgdFreq(cid, k, cs.frequency);
+               this->synWgdFreq(cid, k, cs.frequency) * _dupSplitWeight;
       scale(t);
       applySynScale(t, this->synScaleW(cid, k));
       split += t;
@@ -248,9 +295,9 @@ template <class REAL> void UndatedDLMultiModel<REAL>::allocateMemory() {
  *  Free memory allocated to the CLVs
  */
 template <class REAL> void UndatedDLMultiModel<REAL>::deallocateMemory() {
-  _dlclvs = std::vector<DLCLV>();
-  _dlclvsTop = std::vector<DLCLV>();
-  _uclvs = std::vector<DLCLV>();
+  std::vector<DLCLV>().swap(_dlclvs);
+  std::vector<DLCLV>().swap(_dlclvsTop);
+  std::vector<DLCLV>().swap(_uclvs);
 }
 
 /**
@@ -406,7 +453,7 @@ void UndatedDLMultiModel<REAL>::recomputeSpeciesProbabilities() {
   std::fill(_uEtop.begin(), _uEtop.end(), REAL());
   // iterate several times to resolve _uE probas with
   // fixed point optimization
-  unsigned int maxIt = 4;
+  unsigned int maxIt = this->_info.fixedPointIterations;
   for (unsigned int it = 0; it < maxIt; ++it) {
     for (unsigned int c = 0; c < _gammaCatNumber; ++c) {
       // postorder species tree traversal is granted
@@ -438,7 +485,11 @@ void UndatedDLMultiModel<REAL>::recomputeSpeciesProbabilities() {
         temp = _uE[ec] * _uE[ec] * _PD[ec];
         scale(temp);
         proba += temp;
-        assert(proba < REAL(1.000001));
+        // check proba
+        if (proba > REAL(1.0)) {
+          assert(proba < REAL(1.000001));
+          proba = REAL(1.0);
+        }
         _uE[ec] = proba;
         // --- LORe: unresolved (tetrasomic) extinction EU (STEP 3) ---
         //   EU = r*E^2 + (1-r)*( _PL + _PS*EU[fc]*EU[gc] )    (internal)
@@ -559,7 +610,7 @@ bool UndatedDLMultiModel<REAL>::computeProbability(
     // - S event on a terminal species branch (only for compatible genes and
     // species)
     if (isSpeciesLeaf && this->_geneToSpecies[cid] == e) {
-      temp = REAL(_PS[ec]);
+      temp = REAL(_PS[ec] * (1.0 - this->_fm[e])); // S and observed scenario
       scale(temp);
       proba += temp;
       if (recCell && proba > maxProba) {
@@ -603,8 +654,11 @@ bool UndatedDLMultiModel<REAL>::computeProbability(
         return true;
       }
     }
-    // - D event
-    temp = _dlclvs[cidLeft][ec] * _dlclvs[cidRight][ec] * (_PD[ec] * freq);
+    // - D event (times _dupSplitWeight = 2 by default: either copy can found
+    // either subclade, as the S term counts both orientations of the split;
+    // upstream AleRax 8e34d87. --ale-dup-weights sets it to 1.)
+    temp = _dlclvs[cidLeft][ec] * _dlclvs[cidRight][ec] *
+           (_PD[ec] * freq * _dupSplitWeight);
     scale(temp);
     applySynScale(temp, synS);
     proba += temp;
@@ -658,9 +712,14 @@ bool UndatedDLMultiModel<REAL>::computeProbability(
                   << " (proba < maxProba)" << std::endl;
     return false; // we haven't sampled any event, this should not happen
   }
-  if (proba > REAL(1.0)) {
-    Logger::error << "error: proba=" << proba << " (proba > 1.0)" << std::endl;
-    return false;
+  {
+    const double bound = cladeProbaBound(cid);
+    if (proba > REAL(bound)) {
+      Logger::error << "error: proba=" << proba << " (proba > " << bound
+                    << ", the valid bound for this clade under the current "
+                    << "duplication-split weighting)" << std::endl;
+      return false;
+    }
   }
   return true;
 }
@@ -891,7 +950,7 @@ bool UndatedDLMultiModel<REAL>::sampleUEventImpl(CID cid, corax_rnode_t *sp,
     for (size_t k = 0; k < splits.size(); ++k) {
       const auto &cs = splits[k];
       REAL t = _dlclvs[cs.left][ec] * _dlclvs[cs.right][ec] *
-               this->synWgdFreq(cid, k, cs.frequency);
+               this->synWgdFreq(cid, k, cs.frequency) * _dupSplitWeight;
       scale(t);
       applySynScale(t, this->synScaleW(cid, k));
       dAcc = dAcc + t;

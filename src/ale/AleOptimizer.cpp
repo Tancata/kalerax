@@ -330,11 +330,14 @@ void AleOptimizer::saveRatesAndLL() {
   } else {
     if (ParallelContext::getRank() == 0) {
       std::ofstream dw(FileSystem::joinPaths(ratesDir, "dup_weighting.txt"));
-      if (_info.model == RecModel::UndatedDTL) {
+      // UndatedDTL and UndatedDL both use the weighting (DL since the
+      // upstream AleRax 8e34d87 merge); other models do not.
+      if (_info.model == RecModel::UndatedDTL ||
+          _info.model == RecModel::UndatedDL) {
         dw << (_evaluator->getDupSplitWeight() == 2.0 ? "forward_process" : "ale")
            << " " << _evaluator->getDupSplitWeight() << std::endl;
       } else {
-        dw << "not_applicable (no transfers)" << std::endl;
+        dw << "not_applicable" << std::endl;
       }
     }
     auto globalRatesPath =

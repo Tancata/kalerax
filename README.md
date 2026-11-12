@@ -20,10 +20,12 @@
 > suppresses the bulky per-family output (keeping the summaries, `wgdSummary.txt`
 > and logs) for large runs.
 >
-> **DTL weighting.** Under `UndatedDTL`, duplication and WGD splits are weighted
-> as in the forward process relative to transfers (default since October 2026).
-> `--ale-dup-weights` restores the ALE/AleRax numerics. DTL results from earlier
-> versions are not comparable; see [`DTL_LORE.md`](DTL_LORE.md).
+> **Duplication weighting.** Duplication and WGD splits are weighted as in the
+> forward process (factor 2): under `UndatedDTL` since October 2026, and under
+> `UndatedDL` since the AleRax v1.4.3 merge (November 2026; upstream adopted the
+> same factor for D in 8e34d87). `--ale-dup-weights` restores the old ALE/AleRax
+> numerics. Results from earlier versions are not comparable (DTL before
+> October 2026, DL before the v1.4.3 merge); see [`DTL_LORE.md`](DTL_LORE.md).
 >
 > **Synteny (`--synteny-dir`).** Per-family collinearity observations for
 > same-genome gene pairs are integrated into the reconciliation likelihood, so

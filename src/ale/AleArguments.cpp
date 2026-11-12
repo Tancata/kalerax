@@ -49,8 +49,9 @@ AleArguments::AleArguments(int iargc, char **iargv)
       reconciliationModelStr("UndatedDTL"),
       transferConstraint(TransferConstaint::PARENTS), noDup(false), noDL(false),
       noTL(false), pruneSpeciesTree(false), ccpRooting(CCPRooting::UNIFORM),
-      originationStrategy(OriginationStrategy::UNIFORM), memorySavings(false),
-      d(DEFAULT_DTL_RATES), l(DEFAULT_DTL_RATES), t(DEFAULT_DTL_RATES),
+      originationStrategy(OriginationStrategy::UNIFORM),
+      fixedPointIterations(4), memorySavings(false), d(DEFAULT_DTL_RATES),
+      l(DEFAULT_DTL_RATES), t(DEFAULT_DTL_RATES),
       speciesTreeAlgorithm(SpeciesTreeAlgorithm::User),
       speciesSearchStrategy(SpeciesSearchStrategy::SKIP),
       inferSpeciationOrders(false),
@@ -145,6 +146,14 @@ AleArguments::AleArguments(int iargc, char **iargv)
       sigmaWMin = atof(argv[++i]);
     } else if (arg == "--synteny-unlisted-na") {
       syntenyUnlistedNA = true;
+    } else if (arg == "--fixed-point-iterations") {
+      auto iterations = atoi(argv[++i]);
+      if (iterations < 1) {
+        Logger::info << "\n--fixed-point-iterations must be at least 1 but is "
+                     << iterations << std::endl;
+        ParallelContext::abort(0);
+      }
+      fixedPointIterations = static_cast<unsigned int>(iterations);
     } else if (arg == "--d") {
       d = atof(argv[++i]);
     } else if (arg == "--l") {
@@ -301,6 +310,8 @@ void AleArguments::printSummary() const {
   if (noTL) {
     Logger::info << "\tThe model will not consider TL events" << std::endl;
   }
+  Logger::info << "\tFixed-point iterations: " << fixedPointIterations
+               << std::endl;
   Logger::info << "\tMemory savings: " << getOnOff(memorySavings) << std::endl;
   Logger::info << "\tModel parametrization: ";
   switch (modelParametrization) {
@@ -492,6 +503,7 @@ void AleArguments::printHelp() const {
   Logger::info << "\t--no-dup" << std::endl;
   Logger::info << "\t--no-dl" << std::endl;
   Logger::info << "\t--no-tl" << std::endl;
+  Logger::info << "\t--fixed-point-iterations <int>" << std::endl;
   Logger::info << "\t--memory-savings" << std::endl;
   Logger::info << "\t--wgd <LABEL[,LABEL2][:q0]> (declare a WGD on a terminal "
                << "branch or the branch to the LCA of two taxa; repeatable)"

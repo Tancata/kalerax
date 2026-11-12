@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Regression gate for the duplication vs transfer split weighting.
-#  (1) UndatedDL: --ale-dup-weights is a no-op (identical per-family lnL);
+#  (1) UndatedDL: the weighting applies too (since the upstream AleRax 8e34d87
+#      merge): default and --ale-dup-weights give different per-family lnL and
+#      are labelled forward_process / ale;
 #  (2) labelling and checkpoint marker: a new UndatedDTL run records the
 #      forward-process weighting; --ale-dup-weights records "ale"; a checkpoint
 #      without a marker (created before the default switch) resumes with the
@@ -22,10 +24,13 @@ C=(-f "$TMP/fam.txt" -s "$E/tree.nw" --gene-tree-rooting UNIFORM
    --species-tree-search SKIP --summary-only --gene-tree-samples 0 --seed 1 --wgd ATHA,ATRI)
 "$BIN" "${C[@]}" --rec-model UndatedDL -p "$TMP/dl0" > /dev/null 2>&1
 "$BIN" "${C[@]}" --rec-model UndatedDL --ale-dup-weights -p "$TMP/dl1" > /dev/null 2>&1
-if cmp -s <(sort "$TMP/dl0/per_fam_likelihoods.txt") <(sort "$TMP/dl1/per_fam_likelihoods.txt"); then
-  echo "  PASS: UndatedDL per-family likelihoods identical with/without --ale-dup-weights"
+l0=$(cut -d' ' -f1 "$TMP/dl0/model_parameters/dup_weighting.txt")
+l1=$(cut -d' ' -f1 "$TMP/dl1/model_parameters/dup_weighting.txt")
+if ! cmp -s <(sort "$TMP/dl0/per_fam_likelihoods.txt") <(sort "$TMP/dl1/per_fam_likelihoods.txt") && \
+   [ "$l0" = forward_process ] && [ "$l1" = ale ]; then
+  echo "  PASS: UndatedDL uses the duplication weighting (default forward_process, --ale-dup-weights ale)"
 else
-  echo "  FAIL: UndatedDL changed by --ale-dup-weights"; exit 1
+  echo "  FAIL: UndatedDL duplication weighting not applied or not labelled ($l0, $l1)"; exit 1
 fi
 # (no --summary-only for this run: it deletes the CCPs, which a resume needs)
 CR=(-f "$TMP/fam.txt" -s "$E/tree.nw" --gene-tree-rooting UNIFORM
